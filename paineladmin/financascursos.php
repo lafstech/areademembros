@@ -13,7 +13,7 @@ $successMessage = null;
 $errorMessage = null;
 
 // ===================================================================
-// === LÓGICA DE ATUALIZAÇÃO (POST) ===
+// === LÓGICA DE ATUALIZAÇÃO (POST) - (Inalterada) ===
 // ===================================================================
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     try {
@@ -24,16 +24,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $plano_id = (int)($_POST['plano_id'] ?? 0);
             $nome = trim((string)($_POST['nome'] ?? ''));
             $descricao = trim((string)($_POST['descricao'] ?? ''));
-            // Converte valor BRL (197,00) para formato SQL (197.00)
             $valor_brl = (string)($_POST['valor'] ?? '0');
-            $valor_sql = str_replace('.', '', $valor_brl); // Remove separador de milhar
-            $valor_sql = str_replace(',', '.', $valor_sql); // Troca vírgula por ponto
-
+            $valor_sql = str_replace('.', '', $valor_brl); $valor_sql = str_replace(',', '.', $valor_sql);
             $valor = (float)filter_var($valor_sql, FILTER_SANITIZE_NUMBER_FLOAT, FILTER_FLAG_ALLOW_FRACTION);
 
-            if (empty($nome) || $valor < 0) {
-                throw new Exception("Nome e valor válido são obrigatórios para o plano.");
-            }
+            if (empty($nome) || $valor < 0) { throw new Exception("Nome e valor válido são obrigatórios para o plano."); }
 
             if ($plano_id > 0) { // ATUALIZAR PLANO EXISTENTE
                 $stmt = $pdo->prepare("UPDATE planos SET nome = ?, descricao = ?, valor = ? WHERE id = ? AND tipo_acesso = 'TODOS_CURSOS'");
@@ -45,7 +40,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $successMessage = "Plano de Acesso Total criado com sucesso!";
             }
         }
-
         // --- AÇÃO: ATUALIZAR OS VALORES DOS CURSOS ---
         elseif ($action === 'update_courses') {
             $valores = $_POST['valores'] ?? [];
@@ -54,11 +48,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $stmt = $pdo->prepare("UPDATE cursos SET valor = ? WHERE id = ?");
                 foreach ($valores as $curso_id => $novo_valor_brl) {
                     $curso_id_sanitized = (int)$curso_id;
-                    // Converte valor BRL (49,90) para formato SQL (49.90)
-                    $novo_valor_sql = str_replace('.', '', $novo_valor_brl);
-                    $novo_valor_sql = str_replace(',', '.', $novo_valor_sql);
+                    $novo_valor_sql = str_replace('.', '', $novo_valor_brl); $novo_valor_sql = str_replace(',', '.', $novo_valor_sql);
                     $novo_valor_sanitized = (float)filter_var($novo_valor_sql, FILTER_SANITIZE_NUMBER_FLOAT, FILTER_FLAG_ALLOW_FRACTION);
-
                     if ($curso_id_sanitized > 0 && $novo_valor_sanitized >= 0) {
                         $stmt->execute([$novo_valor_sanitized, $curso_id_sanitized]);
                     }
@@ -80,58 +71,40 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 // =====================================================================
 
 // --- DADOS PARA OS CARDS DE STATS ---
-$stats = $pdo->query("
-    SELECT
-        COALESCE(SUM(valor), 0) as total_arrecadado,
-        COUNT(id) as total_vendas
-    FROM pedidos
-    WHERE status = 'APROVADO'
+$stats_aprovado = $pdo->query("
+    SELECT COALESCE(SUM(valor), 0) as total_arrecadado, COUNT(id) as total_vendas
+    FROM pedidos WHERE status = 'APROVADO'
 ")->fetch(PDO::FETCH_ASSOC);
 
-$stats_cursos = $pdo->query("
-    SELECT COUNT(id) as vendas_cursos
-    FROM pedidos
-    WHERE status = 'APROVADO' AND curso_id IS NOT NULL
-")->fetchColumn();
+// ⭐ NOVO: Stats de Vendas Pendentes
+$stats_pendente = $pdo->query("
+    SELECT COALESCE(SUM(valor), 0) as valor_pendente, COUNT(id) as total_pendentes
+    FROM pedidos WHERE status = 'PENDENTE'
+")->fetch(PDO::FETCH_ASSOC);
 
-$stats_planos = $pdo->query("
-    SELECT COUNT(id) as vendas_planos
-    FROM pedidos
-    WHERE status = 'APROVADO' AND plano_id IS NOT NULL
-")->fetchColumn();
-
+// ⭐ NOVO: Contagem de Planos Criados
+$total_planos_criados = $pdo->query("SELECT COUNT(id) FROM planos WHERE tipo_acesso = 'TODOS_CURSOS'")->fetchColumn();
 
 // --- DADOS PARA OS FORMULÁRIOS DE GERENCIAMENTO ---
-$stmt_plano = $pdo->prepare("SELECT * FROM planos WHERE tipo_acesso = 'TODOS_CURSOS' LIMIT 1");
-$stmt_plano->execute();
-$plano_acesso_total = $stmt_plano->fetch(PDO::FETCH_ASSOC);
-
-$stmt_cursos = $pdo->prepare("SELECT id, titulo, valor FROM cursos ORDER BY titulo ASC");
-$stmt_cursos->execute();
-$todos_cursos = $stmt_cursos->fetchAll(PDO::FETCH_ASSOC);
-
+$plano_acesso_total = $pdo->query("SELECT * FROM planos WHERE tipo_acesso = 'TODOS_CURSOS' LIMIT 1")->fetch(PDO::FETCH_ASSOC);
+$todos_cursos = $pdo->query("SELECT id, titulo, valor FROM cursos ORDER BY titulo ASC")->fetchAll(PDO::FETCH_ASSOC);
 
 // --- DADOS PARA TABELAS DE VENDAS ---
-// Vendas por Curso
+// Vendas por Curso (Aprovadas)
 $vendas_por_curso = $pdo->query("
     SELECT c.titulo, COUNT(p.id) as num_vendas, SUM(p.valor) as total_valor
-    FROM pedidos p
-    JOIN cursos c ON p.curso_id = c.id
-    WHERE p.status = 'APROVADO'
-    GROUP BY c.titulo
-    ORDER BY total_valor DESC
+    FROM pedidos p JOIN cursos c ON p.curso_id = c.id
+    WHERE p.status = 'APROVADO' GROUP BY c.titulo ORDER BY total_valor DESC
 ")->fetchAll(PDO::FETCH_ASSOC);
 
-// Vendas do Plano de Acesso Total
+// Vendas do Plano (Aprovadas)
 $vendas_plano_raw = $pdo->query("
     SELECT COUNT(p.id) as num_vendas, COALESCE(SUM(p.valor), 0) as total_valor
-    FROM pedidos p
-    WHERE p.plano_id IS NOT NULL AND p.status = 'APROVADO'
+    FROM pedidos p WHERE p.plano_id IS NOT NULL AND p.status = 'APROVADO'
 ")->fetch(PDO::FETCH_ASSOC);
 
-
-// Transações Recentes (Usando 'created_at' da tabela 'pedidos')
-$recent_transactions = $pdo->query("
+// Transações Aprovadas Recentes (Corrigido para p.created_at)
+$recent_transactions_aprovadas = $pdo->query("
     SELECT p.id, p.created_at, p.valor, u.nome as usuario_nome, u.email as usuario_email,
            COALESCE(c.titulo, pl.nome) as produto_nome
     FROM pedidos p
@@ -140,7 +113,20 @@ $recent_transactions = $pdo->query("
     LEFT JOIN planos pl ON p.plano_id = pl.id
     WHERE p.status = 'APROVADO'
     ORDER BY p.created_at DESC
-    LIMIT 10
+    LIMIT 5
+")->fetchAll(PDO::FETCH_ASSOC);
+
+// ⭐ NOVO: Transações Pendentes Recentes (Corrigido para p.created_at)
+$recent_transactions_pendentes = $pdo->query("
+    SELECT p.id, p.created_at, p.valor, u.nome as usuario_nome, u.email as usuario_email,
+           COALESCE(c.titulo, pl.nome) as produto_nome
+    FROM pedidos p
+    JOIN usuarios u ON p.usuario_id = u.id
+    LEFT JOIN cursos c ON p.curso_id = c.id
+    LEFT JOIN planos pl ON p.plano_id = pl.id
+    WHERE p.status = 'PENDENTE'
+    ORDER BY p.created_at DESC
+    LIMIT 5
 ")->fetchAll(PDO::FETCH_ASSOC);
 
 ?>
@@ -157,7 +143,7 @@ $recent_transactions = $pdo->query("
             --primary-color: #e11d48; --background-color: #111827; --sidebar-color: #1f2937;
             --glass-background: rgba(31, 41, 55, 0.5); --text-color: #f9fafb; --text-muted: #9ca3af;
             --border-color: rgba(255, 255, 255, 0.1); --success-color: #22c55e; --error-color: #f87171;
-            --info-color: #3b82f6; /* Adicionado para consistência */
+            --info-color: #3b82f6; --warning-color: #f59e0b; /* Adicionado Warning */
         }
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body { font-family: 'Poppins', sans-serif; background-color: var(--background-color); color: var(--text-color); display: flex; }
@@ -231,13 +217,13 @@ $recent_transactions = $pdo->query("
             body.sidebar-open .sidebar { transform: translateX(0); }
             body.sidebar-open::after { content: ''; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0, 0, 0, 0.7); z-index: 1001; }
         }
-        @media (max-width: 992px) { /* Novo breakpoint para o grid do dashboard */
+        @media (max-width: 992px) {
              .dashboard-grid { grid-template-columns: 1fr; }
         }
         @media (max-width: 576px) {
              .main-content { padding: 1rem; padding-top: 4.5rem; }
              .stat-card { flex-direction: column; align-items: flex-start; }
-             .data-table td input[type="text"] { width: 100px; } /* Reduz input em telas menores */
+             .data-table td input[type="text"] { width: 100px; }
         }
     </style>
 </head>
@@ -262,21 +248,25 @@ $recent_transactions = $pdo->query("
             <div class="stat-card">
                 <div class="icon-wrapper" style="background-color: rgba(34, 197, 94, 0.1); border-color: var(--success-color);"><svg style="color: var(--success-color);" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M12 6v12m-3-2.818.879.659c1.171.879 3.07.879 4.242 0 1.172-.879 1.172-2.303 0-3.182C13.536 12.219 12.768 12 12 12c-.725 0-1.45-.22-2.003-.659-1.106-.879-1.106-2.303 0-3.182s2.9-.879 4.006 0l.415.33M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg></div>
                 <div class="stat-info">
-                    <div class="stat-number">R$ <?php echo number_format((float)$stats['total_arrecadado'], 2, ',', '.'); ?></div>
+                    <div class="stat-number">R$ <?php echo number_format((float)$stats_aprovado['total_arrecadado'], 2, ',', '.'); ?></div>
                     <div class="stat-label">Total Arrecadado</div>
                 </div>
             </div>
             <div class="stat-card">
                 <div class="icon-wrapper" style="background-color: rgba(59, 130, 246, 0.1); border-color: var(--info-color);"><svg style="color: var(--info-color);" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M2.25 3h1.386c.51 0 .955.343 1.087.835l.383 1.437M7.5 14.25a3 3 0 00-3 3h15.75m-12.75-3h11.218c.51 0 .962-.343 1.087-.835l1.838-5.513c.243-.728-.364-1.415-1.118-1.415H4.5M3 7.5h16.5M7.5 18.75a.375.375 0 11-.75 0 .375.375 0 01.75 0zM16.5 18.75a.375.375 0 11-.75 0 .375.375 0 01.75 0z" /></svg></div>
-                <div class="stat-info"><div class="stat-number"><?php echo $stats['total_vendas']; ?></div><div class="stat-label">Vendas Totais</div></div>
+                <div class="stat-info"><div class="stat-number"><?php echo $stats_aprovado['total_vendas']; ?></div><div class="stat-label">Vendas Aprovadas</div></div>
             </div>
             <div class="stat-card">
-                <div class="icon-wrapper"><svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M12 6.042A8.967 8.967 0 006 3.75c-1.052 0-2.062.18-3 .512v14.25A8.987 8.987 0 016 18c2.305 0 4.408.867 6 2.292m0-14.25a8.966 8.966 0 016-2.292c1.052 0 2.062.18 3 .512v14.25A8.987 8.987 0 0018 18a8.967 8.967 0 00-6 2.292m0-14.25v14.25" /></svg></div>
-                <div class="stat-info"><div class="stat-number"><?php echo $stats_cursos; ?></div><div class="stat-label">Cursos Vendidos</div></div>
+                <div class="icon-wrapper" style="background-color: rgba(245, 158, 11, 0.1); border-color: var(--warning-color);"><svg style="color: var(--warning-color);" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z" /></svg></div>
+                <div class="stat-info">
+                    <div class="stat-number"><?php echo $stats_pendente['total_pendentes']; ?></div>
+                    <div class="stat-label">Vendas Pendentes</div>
+                    <div class="stat-label" style="font-size: 0.8rem; color: var(--warning-color);">(R$ <?php echo number_format((float)$stats_pendente['valor_pendente'], 2, ',', '.'); ?>)</div>
+                </div>
             </div>
-            <div class="stat-card">
+             <div class="stat-card">
                 <div class="icon-wrapper"><svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M16.5 10.5V6.75a4.5 4.5 0 10-9 0v3.75m-.75 11.25h10.5a2.25 2.25 0 002.25-2.25v-6.75a2.25 2.25 0 00-2.25-2.25H6.75a2.25 2.25 0 00-2.25 2.25v6.75a2.25 2.25 0 002.25 2.25z" /></svg></div>
-                <div class="stat-info"><div class="stat-number"><?php echo $stats_planos; ?></div><div class="stat-label">Planos Vendidos</div></div>
+                <div class="stat-info"><div class="stat-number"><?php echo $total_planos_criados; ?></div><div class="stat-label">Planos Criados</div></div>
             </div>
         </section>
 
@@ -284,7 +274,7 @@ $recent_transactions = $pdo->query("
 
             <div class="left-column">
                 <section class="management-card">
-                    <h2>Vendas por Produto</h2>
+                    <h2>Vendas por Produto (Aprovadas)</h2>
                     <div class="table-wrapper">
                         <table class="data-table">
                             <thead><tr><th>Produto</th><th>Vendas</th><th>Total (R$)</th></tr></thead>
@@ -312,25 +302,51 @@ $recent_transactions = $pdo->query("
                 </section>
 
                 <section class="management-card">
-                    <h2>Últimas 10 Transações (Aprovadas)</h2>
+                    <h2 style="color: var(--warning-color);">Últimas 5 Transações Pendentes</h2>
                     <div class="table-wrapper">
                         <table class="data-table">
                             <thead><tr><th>ID</th><th>Usuário</th><th>Produto</th><th>Valor</th><th>Data</th></tr></thead>
                             <tbody>
-                                <?php foreach ($recent_transactions as $tx): ?>
+                                <?php foreach ($recent_transactions_pendentes as $tx): ?>
                                 <tr>
                                     <td>#<?php echo $tx['id']; ?></td>
                                     <td>
                                         <?php echo htmlspecialchars($tx['usuario_nome']); ?>
-                                        <span class="user-email"><?php echo htmlspecialchars($tx['usuario_email'] ?? 'Email não encontrado'); ?></span>
+                                        <span class="user-email"><?php echo htmlspecialchars($tx['usuario_email'] ?? 'N/A'); ?></span>
                                     </td>
                                     <td><?php echo htmlspecialchars($tx['produto_nome']); ?></td>
                                     <td>R$ <?php echo number_format((float)$tx['valor'], 2, ',', '.'); ?></td>
                                     <td><?php echo date("d/m/Y H:i", strtotime($tx['created_at'])); ?></td>
                                 </tr>
                                 <?php endforeach; ?>
-                                <?php if (empty($recent_transactions)): ?>
-                                    <tr><td colspan="5" style="text-align: center; color: var(--text-muted);">Nenhuma transação encontrada.</td></tr>
+                                <?php if (empty($recent_transactions_pendentes)): ?>
+                                    <tr><td colspan="5" style="text-align: center; color: var(--text-muted);">Nenhuma transação pendente encontrada.</td></tr>
+                                <?php endif; ?>
+                            </tbody>
+                        </table>
+                    </div>
+                </section>
+
+                <section class="management-card">
+                    <h2>Últimas 5 Transações Aprovadas</h2>
+                    <div class="table-wrapper">
+                        <table class="data-table">
+                            <thead><tr><th>ID</th><th>Usuário</th><th>Produto</th><th>Valor</th><th>Data</th></tr></thead>
+                            <tbody>
+                                <?php foreach ($recent_transactions_aprovadas as $tx): ?>
+                                <tr>
+                                    <td>#<?php echo $tx['id']; ?></td>
+                                    <td>
+                                        <?php echo htmlspecialchars($tx['usuario_nome']); ?>
+                                        <span class="user-email"><?php echo htmlspecialchars($tx['usuario_email'] ?? 'N/A'); ?></span>
+                                    </td>
+                                    <td><?php echo htmlspecialchars($tx['produto_nome']); ?></td>
+                                    <td>R$ <?php echo number_format((float)$tx['valor'], 2, ',', '.'); ?></td>
+                                    <td><?php echo date("d/m/Y H:i", strtotime($tx['created_at'])); ?></td>
+                                </tr>
+                                <?php endforeach; ?>
+                                <?php if (empty($recent_transactions_aprovadas)): ?>
+                                    <tr><td colspan="5" style="text-align: center; color: var(--text-muted);">Nenhuma transação aprovada encontrada.</td></tr>
                                 <?php endif; ?>
                             </tbody>
                         </table>
@@ -426,47 +442,31 @@ $recent_transactions = $pdo->query("
             });
         }
 
-        // --- Lógica para formatar campos de valor como BRL (opcional, mas recomendado) ---
+        // --- Lógica para formatar campos de valor como BRL ---
         function formatarCampoBRL(input) {
-            let valor = input.value.replace(/\D/g, ''); // Remove tudo que não for dígito
+            let valor = input.value.replace(/\D/g, '');
             if(valor === "") valor = "0";
-
-            // Converte para centavos (ex: "19700") e depois para float (ex: 197.00)
-            valor = (parseInt(valor, 10) / 100).toFixed(2);
-
-            let partes = valor.split('.');
-            // Adiciona separador de milhar
+            valor = (parseInt(valor, 10) / 100).toFixed(2).replace('.', ',');
+            let partes = valor.split(',');
             partes[0] = partes[0].replace(/\B(?=(\d{3})+(?!\d))/g, '.');
-
             input.value = partes.join(',');
         }
 
-        // Aplica a máscara em todos os inputs de valor
         document.querySelectorAll('#plano-valor, .data-table input[name^="valores["]').forEach(input => {
             // Formata ao carregar a página
-            formatarCampoBRL(input);
+            if(input.value) { // Formata apenas se não estiver vazio
+                 formatarCampoBRL(input);
+            }
 
             // Formata ao digitar
-            input.addEventListener('keyup', (e) => {
-                // Apenas formata se for um número, backspace ou delete
-                if ( (e.key >= '0' && e.key <= '9') || e.key === 'Backspace' || e.key === 'Delete' || e.key.includes('Arrow') ) {
-                   if (e.key !== 'Backspace' && e.key !== 'Delete') {
-                        // Salva a posição do cursor
-                        let pos = e.target.selectionStart;
-                        let oldLength = e.target.value.length;
-                        formatarCampoBRL(e.target);
-                        let newLength = e.target.value.length;
-                        // Restaura a posição do cursor
-                        e.target.setSelectionRange(pos + (newLength - oldLength), pos + (newLength - oldLength));
-                   }
-                } else {
-                    // Previne teclas não numéricas (exceto as de controle)
-                    if (!e.ctrlKey && !e.metaKey && !e.altKey && e.key.length === 1) {
-                        e.preventDefault();
-                    }
-                }
+            input.addEventListener('input', (e) => { // Trocado de 'keyup' para 'input' para melhor R$
+                let originalPos = e.target.selectionStart;
+                let originalLength = e.target.value.length;
+                formatarCampoBRL(e.target);
+                let newLength = e.target.value.length;
+                e.target.setSelectionRange(originalPos + (newLength - originalLength), originalPos + (newLength - originalLength));
             });
-            // Formata ao colar
+             // Formata ao colar
              input.addEventListener('paste', (e) => {
                 e.preventDefault();
                 let text = (e.clipboardData || window.clipboardData).getData('text');
@@ -474,7 +474,6 @@ $recent_transactions = $pdo->query("
                 formatarCampoBRL(input);
             });
         });
-
     });
     </script>
 </body>
