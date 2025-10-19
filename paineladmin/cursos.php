@@ -68,7 +68,7 @@ try {
                 $titulo = trim($_POST['file_titulo']);
                 $descricao = trim($_POST['file_descricao']);
                 $caminho_arquivo = trim($_POST['file_caminho']);
-                $arquivo_id = $_POST['arquivo_id'] ?? null;
+                $arquivo_id = $_POST['arquivo_id'] ?? null; // Novo campo para edição
 
                 if (empty($aula_id) || empty($titulo) || empty($caminho_arquivo)) {
                     throw new Exception("Título, Aula ID e Caminho do Arquivo são obrigatórios.");
@@ -79,14 +79,17 @@ try {
                 if ($arquivo_id) { // UPDATE ARQUIVO
                     $sql_file = "UPDATE arquivos SET titulo = ?, descricao = ?, caminho_arquivo = ? WHERE id = ?";
                     $pdo->prepare($sql_file)->execute([$titulo, $descricao, $caminho_arquivo, $arquivo_id]);
+                    $feedback_message = 'Arquivo atualizado com sucesso!';
                     $status_redirect = 'file_saved';
                 } else { // INSERT NOVO ARQUIVO
                     $sql_file = "INSERT INTO arquivos (titulo, descricao, caminho_arquivo) VALUES (?, ?, ?)";
                     $pdo->prepare($sql_file)->execute([$titulo, $descricao, $caminho_arquivo]);
-                    $arquivo_id = $pdo->lastInsertId('arquivos_id_seq'); // Ajuste o nome da sequence se necessário
+                    $arquivo_id = $pdo->lastInsertId('arquivos_id_seq');
 
+                    // Relaciona o arquivo à aula (apenas se for novo)
                     $sql_relate = "INSERT INTO aula_arquivos (aula_id, arquivo_id) VALUES (?, ?)";
                     $pdo->prepare($sql_relate)->execute([$aula_id, $arquivo_id]);
+                    $feedback_message = 'Arquivo adicionado com sucesso à aula!';
                     $status_redirect = 'file_added';
                 }
 
@@ -105,6 +108,7 @@ try {
                 $sql = "UPDATE aulas SET ordem = ? WHERE id = ?";
                 $stmt = $pdo->prepare($sql);
                 foreach ($ordered_ids as $index => $id) {
+                    // Garante que o ID seja um inteiro para segurança
                     $stmt->execute([$index, (int)$id]);
                 }
                 $pdo->commit();
@@ -128,12 +132,16 @@ try {
             header('Location: cursos.php?view=lessons&curso_id=' . $curso_id_redirect . '&status=lesson_deleted');
             exit();
         }
+
+        // AÇÃO PARA DELETAR ARQUIVO
         if ($_GET['action'] === 'delete_file' && isset($_GET['id']) && isset($_GET['curso_id'])) {
             $arquivo_id = (int)$_GET['id'];
             $curso_id_redirect = (int)$_GET['curso_id'];
 
             $pdo->beginTransaction();
+            // Remove o relacionamento (caso o arquivo esteja em várias aulas)
             $pdo->prepare("DELETE FROM aula_arquivos WHERE arquivo_id = ?")->execute([$arquivo_id]);
+            // Remove o arquivo da tabela principal
             $pdo->prepare("DELETE FROM arquivos WHERE id = ?")->execute([$arquivo_id]);
             $pdo->commit();
 
@@ -173,16 +181,20 @@ if ($view === 'grid') {
     $curso_ativo = $stmt->fetch(PDO::FETCH_ASSOC);
     if (!$curso_ativo) {
         $view = 'grid'; // Redireciona se o curso não for encontrado
-        $cursos = $pdo->query("SELECT c.*, (SELECT COUNT(*) FROM aulas WHERE curso_id = c.id) as total_aulas, (SELECT COUNT(*) FROM usuario_cursos WHERE curso_id = c.id) as total_alunos FROM cursos c ORDER BY c.titulo ASC")->fetchAll(PDO::FETCH_ASSOC);
+        // Recarrega os cursos para a view de grid
+        $sql = "SELECT c.*, (SELECT COUNT(*) FROM aulas WHERE curso_id = c.id) as total_aulas, (SELECT COUNT(*) FROM usuario_cursos WHERE curso_id = c.id) as total_alunos FROM cursos c ORDER BY c.titulo ASC";
+        $cursos = $pdo->query($sql)->fetchAll(PDO::FETCH_ASSOC);
     } else {
         $stmt = $pdo->prepare("SELECT * FROM aulas WHERE curso_id = ? ORDER BY ordem ASC");
         $stmt->execute([$curso_id_ativo]);
         $aulas = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
+        // Lógica para buscar e mapear arquivos por aula
         if (!empty($aulas)) {
             $aula_ids = array_column($aulas, 'id');
             $placeholders = implode(',', array_fill(0, count($aula_ids), '?'));
-            $sql_files = "SELECT a.id, a.titulo, a.descricao, a.caminho_arquivo, aa.aula_id
+            $sql_files = "SELECT
+                            a.id, a.titulo, a.descricao, a.caminho_arquivo, aa.aula_id
                           FROM arquivos a
                           JOIN aula_arquivos aa ON a.id = aa.arquivo_id
                           WHERE aa.aula_id IN ($placeholders)";
@@ -191,6 +203,7 @@ if ($view === 'grid') {
             $stmt_files->execute($aula_ids);
             $arquivos = $stmt_files->fetchAll(PDO::FETCH_ASSOC);
 
+            // Mapeia os arquivos por aula_id
             foreach ($arquivos as $file) {
                 $arquivos_por_aula[$file['aula_id']][] = $file;
             }
@@ -229,7 +242,7 @@ if ($view === 'grid') {
         .sidebar nav a:hover, .sidebar nav a.active { background-color: var(--glass-background); color: var(--text-color); }
         .sidebar nav a svg { width: 24px; height: 24px; flex-shrink: 0; }
         .user-profile { position: relative; margin-top: auto; background-color: var(--glass-background); padding: 0.75rem; border-radius: 8px; display: flex; align-items: center; gap: 1rem; cursor: pointer; border: 1px solid transparent; transition: all 0.3s ease; flex-shrink: 0; }
-        .user-profile:hover { border-color: var(--border-color); } /* Corrigido de --primary-color para --border-color */
+        .user-profile:hover { border-color: var(--border-color); }
         .avatar { width: 40px; height: 40px; border-radius: 50%; background-color: var(--primary-color); display: flex; align-items: center; justify-content: center; font-weight: 600; font-size: 1rem; flex-shrink: 0; }
         .user-info { overflow: hidden; }
         .user-info .user-name { font-weight: 600; font-size: 0.9rem; line-height: 1.2; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -238,7 +251,6 @@ if ($view === 'grid') {
         .profile-dropdown.show { visibility: visible; opacity: 1; transform: translateY(0); }
         .profile-dropdown a { display: flex; align-items: center; gap: 0.75rem; padding: 0.75rem; color: var(--text-muted); text-decoration: none; font-size: 0.9rem; border-radius: 6px; }
         .profile-dropdown a:hover { background-color: var(--glass-background); color: var(--text-color); }
-
         .main-content { margin-left: 260px; flex-grow: 1; padding: 2rem 3rem; height: 100vh; overflow-y: auto; transition: margin-left 0.3s ease; width: calc(100% - 260px); }
         .menu-toggle { display: none; position: fixed; top: 1.5rem; left: 1.5rem; z-index: 1001; cursor: pointer; padding: 10px; background-color: var(--sidebar-color); border-radius: 8px; border: 1px solid var(--border-color); }
         .menu-toggle svg { width: 24px; height: 24px; color: var(--text-color); }
@@ -272,7 +284,7 @@ if ($view === 'grid') {
 
         .lesson-manager-header { display: flex; align-items: center; gap: 1rem; margin-bottom: 2rem; flex-wrap: wrap; }
         .lesson-manager-header h1 { font-size: 1.8rem; }
-        .lesson-list { list-style: none; }
+        .lesson-list { list-style: none; padding: 0; }
         .lesson-item { display: flex; align-items: center; gap: 1rem; background: var(--glass-background); padding: 1rem; border-radius: 8px; margin-bottom: 1rem; border: 1px solid var(--border-color); transition: background 0.2s; }
         .lesson-item:hover { background: rgba(31, 41, 55, 0.8); }
         .drag-handle { cursor: grab; color: var(--text-muted); font-size: 1.2rem; line-height: 1; padding: 0 0.5rem; }
@@ -314,7 +326,7 @@ if ($view === 'grid') {
         .file-actions { display: flex; gap: 0.5rem; flex-shrink: 0; }
         .file-actions a, .file-actions button { padding: 0.5rem; }
 
-        /* --- RESPONSIVIDADE (Unificada) --- */
+        /* --- RESPONSIVIDADE (Unificada da index.php + Cursos) --- */
         @media (max-width: 1024px) {
             .sidebar { width: 280px; transform: translateX(-280px); box-shadow: 5px 0 15px rgba(0, 0, 0, 0.5); z-index: 1002; }
             .user-profile { margin-top: 1.5rem; position: relative; }
@@ -348,7 +360,11 @@ if ($view === 'grid') {
         <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" width="24" height="24"><path stroke-linecap="round" stroke-linejoin="round" d="M3.75 6.75h16.5M3.75 12h16.5m-16.5 5.25h16.5" /></svg>
     </div>
 
-    <?php include '_sidebar_admin.php'; // Inclui a sidebar universal ?>
+    <?php
+    // Define $pagina_atual ANTES de incluir a sidebar
+    $pagina_atual = 'cursos.php';
+    include '_sidebar_admin.php'; // Inclui a sidebar universal
+    ?>
 
     <main class="main-content">
         <?php if ($view === 'grid'): ?>
@@ -364,9 +380,9 @@ if ($view === 'grid') {
                     <div class="course-card-content">
                         <h3><?php echo htmlspecialchars($curso['titulo']); ?></h3>
                         <div class="course-card-stats">
-                            <span><svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M12 6.042A8.967 8.967 0 006 3.75c-1.052 0-2.062.18-3 .512v14.25A8.987 8.987 0 016 18c2.305 0 4.408.867 6 2.292m0-14.25a8.966 8.966 0 016-2.292c1.052 0 2.062.18 3 .512v14.25A8.987 8.987 0 0018 18a8.967 8.967 0 00-6 2.292m0-14.25v14.25" /></svg>
+                            <span><svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" style="width:16px; height:16px; margin-right: 4px;"><path stroke-linecap="round" stroke-linejoin="round" d="M12 6.042A8.967 8.967 0 006 3.75c-1.052 0-2.062.18-3 .512v14.25A8.987 8.987 0 016 18c2.305 0 4.408.867 6 2.292m0-14.25a8.966 8.966 0 016-2.292c1.052 0 2.062.18 3 .512v14.25A8.987 8.987 0 0018 18a8.967 8.967 0 00-6 2.292m0-14.25v14.25" /></svg>
                                 <?php echo $curso['total_aulas']; ?> Aulas</span>
-                            <span><svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M15 19.128a9.38 9.38 0 002.625.372 9.337 9.337 0 004.121-.952 4.125 4.125 0 00-7.533-2.493M15 19.128v-.003c0-1.113-.285-2.16-.786-3.07M15 19.128v.106A12.318 12.318 0 018.624 21c-2.331 0-4.512-.645-6.374-1.766l-.001-.109a6.375 6.375 0 0111.964-4.663M12 12.375a3.75 3.75 0 100-7.5 3.75 3.75 0 000 7.5z" /></svg>
+                            <span><svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" style="width:16px; height:16px; margin-right: 4px;"><path stroke-linecap="round" stroke-linejoin="round" d="M15 19.128a9.38 9.38 0 002.625.372 9.337 9.337 0 004.121-.952 4.125 4.125 0 00-7.533-2.493M15 19.128v-.003c0-1.113-.285-2.16-.786-3.07M15 19.128v.106A12.318 12.318 0 018.624 21c-2.331 0-4.512-.645-6.374-1.766l-.001-.109a6.375 6.375 0 0111.964-4.663M12 12.375a3.75 3.75 0 100-7.5 3.75 3.75 0 000 7.5z" /></svg>
                                 <?php echo $curso['total_alunos']; ?> Alunos</span>
                         </div>
                         <div class="course-card-actions">
@@ -489,7 +505,7 @@ if ($view === 'grid') {
 
     <script>
     document.addEventListener('DOMContentLoaded', () => {
-        // --- LÓGICA PADRÃO SIDEBAR/DROPDOWN ---
+        // --- LÓGICA PADRÃO SIDEBAR/DROPDOWN (da index.php) ---
         const menuToggle = document.getElementById('menu-toggle');
         const sidebar = document.querySelector('.sidebar');
         const body = document.body;
@@ -622,18 +638,18 @@ if ($view === 'grid') {
                                     </div>
                                     <div class="file-actions">
                                         <a href="${file.caminho_arquivo}" target="_blank" class="btn-secondary" title="Visualizar Link">
-                                            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+                                            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" style="width:20px; height:20px;">
                                               <path stroke-linecap="round" stroke-linejoin="round" d="M2.036 12.322a1.012 1.012 0 0 1 0-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178Z" />
                                               <path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z" />
                                             </svg>
                                         </a>
                                         <button class="btn-secondary edit-file-from-list" data-file='${JSON.stringify({ ...file, aula_id: aulaId }).replace(/'/g, '&#39;')}' title="Editar Arquivo">
-                                            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+                                            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" style="width:20px; height:20px;">
                                               <path stroke-linecap="round" stroke-linejoin="round" d="m16.862 4.487 1.687-1.688a1.875 1.875 0 1 1 2.652 2.652L10.582 16.07a4.5 4.5 0 0 1-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 0 1 1.13-1.897l8.932-8.931Zm0 0L19.5 7.125M18 14v4.75A2.25 2.25 0 0 1 15.75 21H5.25A2.25 2.25 0 0 1 3 18.75V8.25A2.25 2.25 0 0 1 5.25 6H10" />
                                             </svg>
                                         </button>
                                         <a href="cursos.php?action=delete_file&id=${file.id}&curso_id=${cursoId}" onclick="return confirm('Tem certeza que deseja DELETAR o arquivo \\'${file.titulo}\\'?');" class="btn-secondary btn-delete" title="Deletar Arquivo">
-                                            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+                                            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" style="width:20px; height:20px;">
                                               <path stroke-linecap="round" stroke-linejoin="round" d="m14.74 9-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 0 1-2.244 2.077H8.084a2.25 2.25 0 0 1-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 0 0-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 0 1 3.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 0 0-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 0 0-7.5 0" />
                                             </svg>
                                         </a>
