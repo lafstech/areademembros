@@ -144,7 +144,7 @@ $cursos_sem_aulas = $pdo->query("
 
         <section class="stats-grid">
             <div class="stat-card">
-                <div class="icon-wrapper"><svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M18 18.72a9.094 9.094 0 003.741-.479 3 3 0 00-4.682-2.72m-7.5-2.962a4.5 4.5 0 11-9 0 4.5 4.5 0 019 0zM18 18.72v-5.25A2.25 2.25 0 0015.75 11.25H12M18 18.72l-2.178-2.178m0 0a2.25 2.25 0 10-3.182-3.182m3.182 3.182L12 15.364" /></svg></div>
+                <div class="icon-wrapper"><svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="size-6"><path stroke-linecap="round" stroke-linejoin="round" d="M15.75 6a3.75 3.75 0 1 1-7.5 0 3.75 3.75 0 0 1 7.5 0ZM4.501 20.118a7.5 7.5 0 0 1 14.998 0A17.933 17.933 0 0 1 12 21.75c-2.676 0-5.216-.584-7.499-1.632Z"></path></svg></div>
                 <div class="stat-info"><div class="stat-number"><?php echo $total_usuarios; ?></div><div class="stat-label">Total de Usuários</div></div>
             </div>
             <div class="stat-card">
@@ -152,7 +152,7 @@ $cursos_sem_aulas = $pdo->query("
                 <div class="stat-info"><div class="stat-number"><?php echo $total_cursos; ?></div><div class="stat-label">Cursos Ativos</div></div>
             </div>
             <div class="stat-card">
-                <div class="icon-wrapper"><svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M15.91 11.672a.375.375 0 010 .656l-5.603 3.113a.375.375 0 01-.557-.328V8.887c0-.286.307-.466.557-.327l5.603 3.112z" /></svg></div>
+                <div class="icon-wrapper"><svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="size-6"><path stroke-linecap="round" stroke-linejoin="round" d="M5.25 5.653c0-.856.917-1.398 1.667-.986l11.54 6.347a1.125 1.125 0 0 1 0 1.972l-11.54 6.347a1.125 1.125 0 0 1-1.667-.986V5.653Z" /></svg></div>
                 <div class="stat-info"><div class="stat-number"><?php echo $total_aulas; ?></div><div class="stat-label">Total de Aulas</div></div>
             </div>
             <div class="stat-card">
