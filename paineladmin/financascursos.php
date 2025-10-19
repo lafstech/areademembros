@@ -122,17 +122,15 @@ $vendas_por_curso = $pdo->query("
     ORDER BY total_valor DESC
 ")->fetchAll(PDO::FETCH_ASSOC);
 
-// ⭐ CORREÇÃO AQUI: Busca de vendas do plano (para a tabela)
+// Vendas do Plano de Acesso Total
 $vendas_plano_raw = $pdo->query("
-    SELECT COUNT(p.id) as num_vendas, SUM(p.valor) as total_valor
+    SELECT COUNT(p.id) as num_vendas, COALESCE(SUM(p.valor), 0) as total_valor
     FROM pedidos p
     WHERE p.plano_id IS NOT NULL AND p.status = 'APROVADO'
 ")->fetch(PDO::FETCH_ASSOC);
 
 
-// Transações Recentes
-// ⭐ CORREÇÃO AQUI: Trocado p.data_criacao por p.created_at
-// ⭐ E Adicionado u.email para exibição
+// Transações Recentes (Usando 'created_at' da tabela 'pedidos')
 $recent_transactions = $pdo->query("
     SELECT p.id, p.created_at, p.valor, u.nome as usuario_nome, u.email as usuario_email,
            COALESCE(c.titulo, pl.nome) as produto_nome
@@ -239,6 +237,7 @@ $recent_transactions = $pdo->query("
         @media (max-width: 576px) {
              .main-content { padding: 1rem; padding-top: 4.5rem; }
              .stat-card { flex-direction: column; align-items: flex-start; }
+             .data-table td input[type="text"] { width: 100px; } /* Reduz input em telas menores */
         }
     </style>
 </head>
@@ -262,7 +261,10 @@ $recent_transactions = $pdo->query("
         <section class="stats-grid">
             <div class="stat-card">
                 <div class="icon-wrapper" style="background-color: rgba(34, 197, 94, 0.1); border-color: var(--success-color);"><svg style="color: var(--success-color);" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M12 6v12m-3-2.818.879.659c1.171.879 3.07.879 4.242 0 1.172-.879 1.172-2.303 0-3.182C13.536 12.219 12.768 12 12 12c-.725 0-1.45-.22-2.003-.659-1.106-.879-1.106-2.303 0-3.182s2.9-.879 4.006 0l.415.33M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg></div>
-                <div class="stat-info"><div class="stat-number">R$ <?php echo number_format($stats['total_arrecadado'], 2, ',', '.'); ?></div><div class="stat-label">Total Arrecadado</div></div>
+                <div class="stat-info">
+                    <div class="stat-number">R$ <?php echo number_format((float)$stats['total_arrecadado'], 2, ',', '.'); ?></div>
+                    <div class="stat-label">Total Arrecadado</div>
+                </div>
             </div>
             <div class="stat-card">
                 <div class="icon-wrapper" style="background-color: rgba(59, 130, 246, 0.1); border-color: var(--info-color);"><svg style="color: var(--info-color);" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M2.25 3h1.386c.51 0 .955.343 1.087.835l.383 1.437M7.5 14.25a3 3 0 00-3 3h15.75m-12.75-3h11.218c.51 0 .962-.343 1.087-.835l1.838-5.513c.243-.728-.364-1.415-1.118-1.415H4.5M3 7.5h16.5M7.5 18.75a.375.375 0 11-.75 0 .375.375 0 01.75 0zM16.5 18.75a.375.375 0 11-.75 0 .375.375 0 01.75 0z" /></svg></div>
@@ -291,14 +293,14 @@ $recent_transactions = $pdo->query("
                                     <tr>
                                         <td><strong><?php echo htmlspecialchars($plano_acesso_total['nome']); ?></strong></td>
                                         <td><?php echo $vendas_plano_raw['num_vendas']; ?></td>
-                                        <td>R$ <?php echo number_format($vendas_plano_raw['total_valor'], 2, ',', '.'); ?></td>
+                                        <td>R$ <?php echo number_format((float)$vendas_plano_raw['total_valor'], 2, ',', '.'); ?></td>
                                     </tr>
                                 <?php endif; ?>
                                 <?php foreach ($vendas_por_curso as $venda): ?>
                                     <tr>
                                         <td><?php echo htmlspecialchars($venda['titulo']); ?></td>
                                         <td><?php echo $venda['num_vendas']; ?></td>
-                                        <td>R$ <?php echo number_format($venda['total_valor'], 2, ',', '.'); ?></td>
+                                        <td>R$ <?php echo number_format((float)$venda['total_valor'], 2, ',', '.'); ?></td>
                                     </tr>
                                 <?php endforeach; ?>
                                 <?php if (empty($vendas_por_curso) && ($vendas_plano_raw['num_vendas'] ?? 0) == 0): ?>
@@ -333,13 +335,13 @@ $recent_transactions = $pdo->query("
                             </tbody>
                         </table>
                     </div>
-                     </section>
+                </section>
             </div>
 
             <div class="right-column">
                 <section class="management-card">
                     <h2>Gerenciar Plano de Acesso Total</h2>
-                    <form method="POST" action="">
+                    <form method="POST" action="financascursos.php">
                         <input type="hidden" name="action" value="manage_plan">
                         <input type="hidden" name="plano_id" value="<?php echo $plano_acesso_total['id'] ?? 0; ?>">
 
@@ -361,7 +363,7 @@ $recent_transactions = $pdo->query("
 
                 <section class="management-card">
                     <h2>Gerenciar Preços dos Cursos</h2>
-                    <form method="POST" action="">
+                    <form method="POST" action="financascursos.php">
                         <input type="hidden" name="action" value="update_courses">
                         <div class="table-wrapper">
                             <table class="data-table">
@@ -427,10 +429,13 @@ $recent_transactions = $pdo->query("
         // --- Lógica para formatar campos de valor como BRL (opcional, mas recomendado) ---
         function formatarCampoBRL(input) {
             let valor = input.value.replace(/\D/g, ''); // Remove tudo que não for dígito
-            valor = (parseInt(valor, 10) / 100).toFixed(2).replace('.', ',');
+            if(valor === "") valor = "0";
 
+            // Converte para centavos (ex: "19700") e depois para float (ex: 197.00)
+            valor = (parseInt(valor, 10) / 100).toFixed(2);
+
+            let partes = valor.split('.');
             // Adiciona separador de milhar
-            let partes = valor.split(',');
             partes[0] = partes[0].replace(/\B(?=(\d{3})+(?!\d))/g, '.');
 
             input.value = partes.join(',');
@@ -438,11 +443,35 @@ $recent_transactions = $pdo->query("
 
         // Aplica a máscara em todos os inputs de valor
         document.querySelectorAll('#plano-valor, .data-table input[name^="valores["]').forEach(input => {
+            // Formata ao carregar a página
+            formatarCampoBRL(input);
+
+            // Formata ao digitar
             input.addEventListener('keyup', (e) => {
-                // Evita que a máscara rode em teclas não-numéricas (como setas)
-                if (e.key >= 0 && e.key <= 9 || e.key === 'Backspace' || e.key === 'Delete') {
-                    formatarCampoBRL(e.target);
+                // Apenas formata se for um número, backspace ou delete
+                if ( (e.key >= '0' && e.key <= '9') || e.key === 'Backspace' || e.key === 'Delete' || e.key.includes('Arrow') ) {
+                   if (e.key !== 'Backspace' && e.key !== 'Delete') {
+                        // Salva a posição do cursor
+                        let pos = e.target.selectionStart;
+                        let oldLength = e.target.value.length;
+                        formatarCampoBRL(e.target);
+                        let newLength = e.target.value.length;
+                        // Restaura a posição do cursor
+                        e.target.setSelectionRange(pos + (newLength - oldLength), pos + (newLength - oldLength));
+                   }
+                } else {
+                    // Previne teclas não numéricas (exceto as de controle)
+                    if (!e.ctrlKey && !e.metaKey && !e.altKey && e.key.length === 1) {
+                        e.preventDefault();
+                    }
                 }
+            });
+            // Formata ao colar
+             input.addEventListener('paste', (e) => {
+                e.preventDefault();
+                let text = (e.clipboardData || window.clipboardData).getData('text');
+                input.value = text;
+                formatarCampoBRL(input);
             });
         });
 
