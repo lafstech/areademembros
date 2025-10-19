@@ -1,5 +1,6 @@
 <?php
 // admin/financascursos.php - Versão Completa com Dashboard, Modais e AJAX
+// ⭐ CORRIGIDO para PostgreSQL (funções TO_CHAR e ::date)
 
 declare(strict_types=1);
 
@@ -89,8 +90,9 @@ function handleAjaxRequest($pdo) {
                 }
 
                 // Faturamento por Mês
+                // ⭐ CORREÇÃO: Trocado DATE_FORMAT por TO_CHAR para PostgreSQL
                 $sql_monthly = "
-                    SELECT DATE_FORMAT(created_at, '%Y-%m') as mes,
+                    SELECT TO_CHAR(created_at, 'YYYY-MM') as mes,
                            SUM(valor) as total, COUNT(id) as vendas
                     FROM pedidos
                     $sql_where
@@ -101,8 +103,9 @@ function handleAjaxRequest($pdo) {
                 $monthly_data = $stmt_monthly->fetchAll(PDO::FETCH_ASSOC);
 
                 // Faturamento por Dia
+                // ⭐ CORREÇÃO: Trocado DATE(created_at) por created_at::date para PostgreSQL
                 $sql_daily = "
-                    SELECT DATE(created_at) as dia,
+                    SELECT created_at::date as dia,
                            SUM(valor) as total, COUNT(id) as vendas
                     FROM pedidos
                     $sql_where
@@ -426,6 +429,8 @@ $recent_transactions_pendentes = $pdo->query("
         .modal-filter-bar label { font-weight: 500; }
         .modal-filter-bar input[type="date"] {
             padding: 0.5rem; font-size: 0.9rem; width: auto;
+            /* Corrigindo aparência do date picker no escuro */
+            color-scheme: dark;
         }
         .modal-filter-bar .btn-filter {
             padding: 0.5rem 1rem; font-size: 0.9rem;
@@ -910,6 +915,10 @@ $recent_transactions_pendentes = $pdo->query("
             });
         }
 
+        // --- Referências para os novos modais ---
+        const modalTransacoes = document.getElementById('modal-transacoes');
+        const modalArrecadado = document.getElementById('modal-arrecadado');
+
         // Fechar modais genéricos clicando fora
         window.addEventListener('click', (e) => {
             if (e.target == planosModal) planosModal.style.display = 'none';
@@ -937,9 +946,17 @@ $recent_transactions_pendentes = $pdo->query("
 
         const formatDate_Short_JS = (dateStr) => {
              if (!dateStr) return 'N/A';
+             // Formato do Postgres (YYYY-MM-DD)
              const [year, month, day] = dateStr.split('-');
              return `${day}/${month}/${year}`;
         };
+
+        const formatMonth_JS = (monthStr) => {
+            if (!monthStr) return 'N/A';
+             // Formato (YYYY-MM)
+            const [year, month] = monthStr.split('-');
+            return `${month}/${year}`;
+        }
 
         const showLoading = (element) => {
             element.innerHTML = '<p style="text-align:center; color: var(--text-muted); padding: 2rem 0;">Carregando...</p>';
@@ -951,7 +968,6 @@ $recent_transactions_pendentes = $pdo->query("
 
         // --- 1. Lógica do Modal de Transações (Aprovadas/Pendentes) ---
 
-        const modalTransacoes = document.getElementById('modal-transacoes');
         const openAprovadasBtn = document.getElementById('card-vendas-aprovadas');
         const openPendentesBtn = document.getElementById('card-vendas-pendentes');
         const closeTransacoesBtn = document.getElementById('close-transacoes-modal');
@@ -1043,22 +1059,22 @@ $recent_transactions_pendentes = $pdo->query("
             modalTransacoes.style.display = 'block';
         };
 
-        openAprovadasBtn.addEventListener('click', (e) => { e.preventDefault(); openTransacoesModal('APROVADO'); });
-        openPendentesBtn.addEventListener('click', (e) => { e.preventDefault(); openTransacoesModal('PENDENTE'); });
-        closeTransacoesBtn.addEventListener('click', () => { modalTransacoes.style.display = 'none'; });
+        if (openAprovadasBtn) openAprovadasBtn.addEventListener('click', (e) => { e.preventDefault(); openTransacoesModal('APROVADO'); });
+        if (openPendentesBtn) openPendentesBtn.addEventListener('click', (e) => { e.preventDefault(); openTransacoesModal('PENDENTE'); });
+        if (closeTransacoesBtn) closeTransacoesBtn.addEventListener('click', () => { modalTransacoes.style.display = 'none'; });
 
         // Filtrar
-        filterBtnTx.addEventListener('click', () => {
+        if (filterBtnTx) filterBtnTx.addEventListener('click', () => {
             loadTransacoes(txState.status, 1, dateFromTx.value, dateToTx.value);
         });
 
         // Paginação
-        prevPageBtn.addEventListener('click', () => {
+        if (prevPageBtn) prevPageBtn.addEventListener('click', () => {
             if (txState.page > 1) {
                 loadTransacoes(txState.status, txState.page - 1, dateFromTx.value, dateToTx.value);
             }
         });
-        nextPageBtn.addEventListener('click', () => {
+        if (nextPageBtn) nextPageBtn.addEventListener('click', () => {
             if (txState.page < txState.totalPages) {
                 loadTransacoes(txState.status, txState.page + 1, dateFromTx.value, dateToTx.value);
             }
@@ -1067,7 +1083,6 @@ $recent_transactions_pendentes = $pdo->query("
 
         // --- 2. Lógica do Modal de Faturamento (Total Arrecadado) ---
 
-        const modalArrecadado = document.getElementById('modal-arrecadado');
         const openArrecadadoBtn = document.getElementById('card-total-arrecadado');
         const closeArrecadadoBtn = document.getElementById('close-arrecadado-modal');
         const contentArrecadado = document.getElementById('modal-arrecadado-content');
@@ -1103,7 +1118,7 @@ $recent_transactions_pendentes = $pdo->query("
                     for (const row of data.monthly) {
                         html += `
                             <tr>
-                                <td>${row.mes.replace('-', '/')}</td>
+                                <td>${formatMonth_JS(row.mes)}</td>
                                 <td>${row.vendas}</td>
                                 <td>${formatBRL_JS(row.total)}</td>
                             </tr>
@@ -1111,7 +1126,7 @@ $recent_transactions_pendentes = $pdo->query("
                     }
                     html += '</tbody></table></div>';
                 } else {
-                    html += '<p>Nenhum dado mensal encontrado.</p>';
+                    html += '<p style="text-align:center; color: var(--text-muted); padding: 1rem 0;">Nenhum dado mensal encontrado.</p>';
                 }
 
                 html += '<h2>Faturamento por Dia</h2>';
@@ -1128,7 +1143,7 @@ $recent_transactions_pendentes = $pdo->query("
                     }
                     html += '</tbody></table></div>';
                  } else {
-                     html += '<p>Nenhum dado diário encontrado.</p>';
+                     html += '<p style="text-align:center; color: var(--text-muted); padding: 1rem 0;">Nenhum dado diário encontrado.</p>';
                  }
 
                 contentArrecadado.innerHTML = html;
@@ -1140,12 +1155,12 @@ $recent_transactions_pendentes = $pdo->query("
         }
 
         // Abrir Modal
-        openArrecadadoBtn.addEventListener('click', (e) => {
+        if(openArrecadadoBtn) openArrecadadoBtn.addEventListener('click', (e) => {
             e.preventDefault();
             loadArrecadado(30); // Carga inicial (30 dias)
             modalArrecadado.style.display = 'block';
         });
-        closeArrecadadoBtn.addEventListener('click', () => { modalArrecadado.style.display = 'none'; });
+        if(closeArrecadadoBtn) closeArrecadadoBtn.addEventListener('click', () => { modalArrecadado.style.display = 'none'; });
 
         // Filtrar (7, 14, 30, 0 dias)
         filterButtonsArrecadado.forEach(button => {
