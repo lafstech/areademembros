@@ -7,25 +7,30 @@ $nome_usuario_admin = htmlspecialchars($_SESSION['usuario_nome'] ?? 'Admin');
 $pagina_atual = basename($_SERVER['PHP_SELF']); // Define a página atual para a sidebar
 $feedback_message = '';
 $feedback_type = '';
-$view = $_GET['view'] ?? 'grid';
+$view = $_GET['view'] ?? 'grid'; // Controla a visualização: 'grid' ou 'lessons'
 $curso_id_ativo = isset($_GET['curso_id']) ? (int)$_GET['curso_id'] : null;
-$arquivos_por_aula = [];
-$curso_ativo = null;
+$arquivos_por_aula = []; // Variável para armazenar os arquivos mapeados
+$curso_ativo = null; // Inicializa a variável para evitar erro no PHP se for para a view lessons sem ID
 
-// --- PROCESSAMENTO DE AÇÕES (POST/GET) ---
+// --- PROCESSAMENTO DE AÇÕES ---
 try {
+    // Ações via POST (Adicionar, Editar, etc.)
     if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $action = $_POST['action'] ?? '';
         switch ($action) {
             case 'add_edit_course':
-                // ... (Lógica de adicionar/editar curso) ...
-                $curso_id = $_POST['curso_id']; $titulo = trim($_POST['titulo']); $descricao = trim($_POST['descricao']); $imagem_thumbnail = trim($_POST['imagem_thumbnail']);
+                $curso_id = $_POST['curso_id'];
+                $titulo = trim($_POST['titulo']);
+                $descricao = trim($_POST['descricao']);
+                $imagem_thumbnail = trim($_POST['imagem_thumbnail']);
+
                 if (empty($titulo)) throw new Exception("O título do curso é obrigatório.");
-                if (!empty($curso_id)) {
+
+                if (!empty($curso_id)) { // UPDATE
                     $sql = "UPDATE cursos SET titulo = ?, descricao = ?, imagem_thumbnail = ? WHERE id = ?";
                     $pdo->prepare($sql)->execute([$titulo, $descricao, $imagem_thumbnail, $curso_id]);
                     $feedback_message = 'Curso atualizado com sucesso!';
-                } else {
+                } else { // INSERT
                     $sql = "INSERT INTO cursos (titulo, descricao, imagem_thumbnail) VALUES (?, ?, ?)";
                     $pdo->prepare($sql)->execute([$titulo, $descricao, $imagem_thumbnail]);
                     $feedback_message = 'Curso criado com sucesso!';
@@ -34,85 +39,106 @@ try {
                 break;
 
             case 'add_edit_lesson':
-                 // ... (Lógica de adicionar/editar aula) ...
-                $aula_id = $_POST['aula_id']; $curso_id = $_POST['curso_id_aula']; $titulo = trim($_POST['titulo']);
-                $descricao = trim($_POST['descricao']); $url_video = trim($_POST['url_video']);
+                $aula_id = $_POST['aula_id'];
+                $curso_id = $_POST['curso_id_aula'];
+                $titulo = trim($_POST['titulo']);
+                $descricao = trim($_POST['descricao']);
+                $url_video = trim($_POST['url_video']);
+
                 if (empty($titulo) || empty($curso_id)) throw new Exception("Título e ID do curso são obrigatórios.");
-                if (!empty($aula_id)) {
+
+                if (!empty($aula_id)) { // UPDATE AULA
                     $sql = "UPDATE aulas SET titulo = ?, descricao = ?, url_video = ? WHERE id = ? AND curso_id = ?";
                     $pdo->prepare($sql)->execute([$titulo, $descricao, $url_video, $aula_id, $curso_id]);
-                } else {
+                } else { // INSERT AULA
                     $stmt = $pdo->prepare("SELECT MAX(ordem) as max_ordem FROM aulas WHERE curso_id = ?");
-                    $stmt->execute([$curso_id]); $max_ordem = $stmt->fetchColumn();
+                    $stmt->execute([$curso_id]);
+                    $max_ordem = $stmt->fetchColumn();
                     $nova_ordem = is_null($max_ordem) ? 0 : $max_ordem + 1;
+
                     $sql = "INSERT INTO aulas (curso_id, titulo, descricao, url_video, ordem) VALUES (?, ?, ?, ?, ?)";
                     $pdo->prepare($sql)->execute([$curso_id, $titulo, $descricao, $url_video, $nova_ordem]);
                 }
-                header('Location: cursos.php?view=lessons&curso_id=' . $curso_id . '&status=lesson_saved'); exit();
+                header('Location: cursos.php?view=lessons&curso_id=' . $curso_id . '&status=lesson_saved');
+                exit();
 
             case 'add_file':
-                 // ... (Lógica de adicionar/editar arquivo) ...
-                $aula_id = $_POST['aula_id_file']; $curso_id_redirect = $_POST['curso_id_file']; $titulo = trim($_POST['file_titulo']);
-                $descricao = trim($_POST['file_descricao']); $caminho_arquivo = trim($_POST['file_caminho']); $arquivo_id = $_POST['arquivo_id'] ?? null;
-                if (empty($aula_id) || empty($titulo) || empty($caminho_arquivo)) { throw new Exception("Título, Aula ID e Caminho do Arquivo são obrigatórios."); }
+                $aula_id = $_POST['aula_id_file'];
+                $curso_id_redirect = $_POST['curso_id_file'];
+                $titulo = trim($_POST['file_titulo']);
+                $descricao = trim($_POST['file_descricao']);
+                $caminho_arquivo = trim($_POST['file_caminho']);
+                $arquivo_id = $_POST['arquivo_id'] ?? null;
+
+                if (empty($aula_id) || empty($titulo) || empty($caminho_arquivo)) {
+                    throw new Exception("Título, Aula ID e Caminho do Arquivo são obrigatórios.");
+                }
+
                 $pdo->beginTransaction();
-                if ($arquivo_id) {
+
+                if ($arquivo_id) { // UPDATE ARQUIVO
                     $sql_file = "UPDATE arquivos SET titulo = ?, descricao = ?, caminho_arquivo = ? WHERE id = ?";
                     $pdo->prepare($sql_file)->execute([$titulo, $descricao, $caminho_arquivo, $arquivo_id]);
                     $status_redirect = 'file_saved';
-                } else {
+                } else { // INSERT NOVO ARQUIVO
                     $sql_file = "INSERT INTO arquivos (titulo, descricao, caminho_arquivo) VALUES (?, ?, ?)";
                     $pdo->prepare($sql_file)->execute([$titulo, $descricao, $caminho_arquivo]);
-                    $arquivo_id = $pdo->lastInsertId('arquivos_id_seq'); // Ajuste 'arquivos_id_seq' se o nome da sua sequence for outro
+                    $arquivo_id = $pdo->lastInsertId('arquivos_id_seq'); // Ajuste o nome da sequence se necessário
+
                     $sql_relate = "INSERT INTO aula_arquivos (aula_id, arquivo_id) VALUES (?, ?)";
                     $pdo->prepare($sql_relate)->execute([$aula_id, $arquivo_id]);
                     $status_redirect = 'file_added';
                 }
+
                 $pdo->commit();
-                header('Location: cursos.php?view=lessons&curso_id=' . $curso_id_redirect . '&status=' . $status_redirect); exit();
+                header('Location: cursos.php?view=lessons&curso_id=' . $curso_id_redirect . '&status=' . $status_redirect);
+                exit();
 
             case 'update_lesson_order':
-                 // ... (Lógica AJAX de reordenar) ...
-                header('Content-Type: application/json');
+                header('Content-Type: application/json'); // Responde em JSON
                 $ordered_ids = $_POST['order'] ?? [];
-                if (empty($ordered_ids)) { echo json_encode(['status' => 'error', 'message' => 'Nenhuma ordem recebida.']); exit(); }
+                if (empty($ordered_ids)) {
+                    echo json_encode(['status' => 'error', 'message' => 'Nenhuma ordem recebida.']);
+                    exit();
+                }
                 $pdo->beginTransaction();
-                $sql = "UPDATE aulas SET ordem = ? WHERE id = ?"; $stmt = $pdo->prepare($sql);
-                foreach ($ordered_ids as $index => $id) { $stmt->execute([$index, (int)$id]); }
+                $sql = "UPDATE aulas SET ordem = ? WHERE id = ?";
+                $stmt = $pdo->prepare($sql);
+                foreach ($ordered_ids as $index => $id) {
+                    $stmt->execute([$index, (int)$id]);
+                }
                 $pdo->commit();
-                echo json_encode(['status' => 'success', 'message' => 'Ordem das aulas atualizada.']); exit();
+                echo json_encode(['status' => 'success', 'message' => 'Ordem das aulas atualizada.']);
+                exit();
         }
     }
-
     // Ação de Deletar (via GET)
     if (isset($_GET['action'])) {
         if ($_GET['action'] === 'delete_course' && isset($_GET['id'])) {
-            // Adicionar deleção em cascata (aulas, arquivos, acessos)
-            $curso_id_del = (int)$_GET['id'];
-            $pdo->beginTransaction();
-            // Você pode precisar deletar de `aula_arquivos`, `arquivos` (se não compartilhados), `usuario_cursos`, `aulas`
-            // Simplificado (assumindo ON DELETE CASCADE no DB ou fazendo manual)
-            $pdo->prepare("DELETE FROM usuario_cursos WHERE curso_id = ?")->execute([$curso_id_del]);
-            $pdo->prepare("DELETE FROM aulas WHERE curso_id = ?")->execute([$curso_id_del]); // Aulas primeiro
-            $pdo->prepare("DELETE FROM cursos WHERE id = ?")->execute([$curso_id_del]); // Curso por último
-            $pdo->commit();
-            header('Location: cursos.php?status=course_deleted'); exit();
+            $pdo->prepare("DELETE FROM cursos WHERE id = ?")->execute([$_GET['id']]);
+            header('Location: cursos.php?status=course_deleted');
+            exit();
         }
         if ($_GET['action'] === 'delete_lesson' && isset($_GET['id'])) {
-            $aula_id = (int)$_GET['id'];
+            $aula_id = $_GET['id'];
             $stmt = $pdo->prepare("SELECT curso_id FROM aulas WHERE id = ?");
-            $stmt->execute([$aula_id]); $curso_id_redirect = $stmt->fetchColumn();
-            $pdo->prepare("DELETE FROM aulas WHERE id = ?")->execute([$aula_id]); // Assumindo ON DELETE CASCADE para aula_arquivos
-            header('Location: cursos.php?view=lessons&curso_id=' . $curso_id_redirect . '&status=lesson_deleted'); exit();
+            $stmt->execute([$aula_id]);
+            $curso_id_redirect = $stmt->fetchColumn();
+            $pdo->prepare("DELETE FROM aulas WHERE id = ?")->execute([$aula_id]);
+            header('Location: cursos.php?view=lessons&curso_id=' . $curso_id_redirect . '&status=lesson_deleted');
+            exit();
         }
         if ($_GET['action'] === 'delete_file' && isset($_GET['id']) && isset($_GET['curso_id'])) {
             $arquivo_id = (int)$_GET['id'];
             $curso_id_redirect = (int)$_GET['curso_id'];
+
             $pdo->beginTransaction();
             $pdo->prepare("DELETE FROM aula_arquivos WHERE arquivo_id = ?")->execute([$arquivo_id]);
             $pdo->prepare("DELETE FROM arquivos WHERE id = ?")->execute([$arquivo_id]);
             $pdo->commit();
-            header('Location: cursos.php?view=lessons&curso_id=' . $curso_id_redirect . '&status=file_deleted'); exit();
+
+            header('Location: cursos.php?view=lessons&curso_id=' . $curso_id_redirect . '&status=file_deleted');
+            exit();
         }
     }
 } catch (Exception $e) {
@@ -121,12 +147,14 @@ try {
     $feedback_type = 'error';
 }
 
-// Mensagens de status
 if (isset($_GET['status'])) {
     $status_messages = [
-        'course_deleted' => 'Curso deletado com sucesso!', 'lesson_saved' => 'Aula salva com sucesso!',
-        'lesson_deleted' => 'Aula deletada com sucesso!', 'file_added' => 'Arquivo adicionado com sucesso à aula!',
-        'file_saved' => 'Arquivo atualizado com sucesso!', 'file_deleted' => 'Arquivo deletado com sucesso!'
+        'course_deleted' => 'Curso deletado com sucesso!',
+        'lesson_saved' => 'Aula salva com sucesso!',
+        'lesson_deleted' => 'Aula deletada com sucesso!',
+        'file_added' => 'Arquivo adicionado com sucesso à aula!',
+        'file_saved' => 'Arquivo atualizado com sucesso!',
+        'file_deleted' => 'Arquivo deletado com sucesso!'
     ];
     $feedback_message = $status_messages[$_GET['status']] ?? '';
     $feedback_type = 'success';
@@ -134,25 +162,38 @@ if (isset($_GET['status'])) {
 
 // --- BUSCA DE DADOS DO BANCO ---
 if ($view === 'grid') {
-    $sql = "SELECT c.*, (SELECT COUNT(*) FROM aulas WHERE curso_id = c.id) as total_aulas, (SELECT COUNT(*) FROM usuario_cursos WHERE curso_id = c.id) as total_alunos FROM cursos c ORDER BY c.titulo ASC";
+    $sql = "SELECT c.*,
+            (SELECT COUNT(*) FROM aulas WHERE curso_id = c.id) as total_aulas,
+            (SELECT COUNT(*) FROM usuario_cursos WHERE curso_id = c.id) as total_alunos
+            FROM cursos c ORDER BY c.titulo ASC";
     $cursos = $pdo->query($sql)->fetchAll(PDO::FETCH_ASSOC);
 } elseif ($view === 'lessons' && $curso_id_ativo) {
     $stmt = $pdo->prepare("SELECT * FROM cursos WHERE id = ?");
     $stmt->execute([$curso_id_ativo]);
     $curso_ativo = $stmt->fetch(PDO::FETCH_ASSOC);
-    if (!$curso_ativo) { $view = 'grid'; } // Redireciona se o curso não for encontrado
-    else {
+    if (!$curso_ativo) {
+        $view = 'grid'; // Redireciona se o curso não for encontrado
+        $cursos = $pdo->query("SELECT c.*, (SELECT COUNT(*) FROM aulas WHERE curso_id = c.id) as total_aulas, (SELECT COUNT(*) FROM usuario_cursos WHERE curso_id = c.id) as total_alunos FROM cursos c ORDER BY c.titulo ASC")->fetchAll(PDO::FETCH_ASSOC);
+    } else {
         $stmt = $pdo->prepare("SELECT * FROM aulas WHERE curso_id = ? ORDER BY ordem ASC");
         $stmt->execute([$curso_id_ativo]);
         $aulas = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
         if (!empty($aulas)) {
             $aula_ids = array_column($aulas, 'id');
             $placeholders = implode(',', array_fill(0, count($aula_ids), '?'));
-            $sql_files = "SELECT a.id, a.titulo, a.descricao, a.caminho_arquivo, aa.aula_id FROM arquivos a JOIN aula_arquivos aa ON a.id = aa.arquivo_id WHERE aa.aula_id IN ($placeholders)";
+            $sql_files = "SELECT a.id, a.titulo, a.descricao, a.caminho_arquivo, aa.aula_id
+                          FROM arquivos a
+                          JOIN aula_arquivos aa ON a.id = aa.arquivo_id
+                          WHERE aa.aula_id IN ($placeholders)";
+
             $stmt_files = $pdo->prepare($sql_files);
             $stmt_files->execute($aula_ids);
             $arquivos = $stmt_files->fetchAll(PDO::FETCH_ASSOC);
-            foreach ($arquivos as $file) { $arquivos_por_aula[$file['aula_id']][] = $file; }
+
+            foreach ($arquivos as $file) {
+                $arquivos_por_aula[$file['aula_id']][] = $file;
+            }
         }
     }
 }
@@ -167,6 +208,7 @@ if ($view === 'grid') {
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <script src="https://cdn.jsdelivr.net/npm/sortablejs@latest/Sortable.min.js"></script>
+
     <style>
         /* === CSS BASE (da index.php) === */
         :root {
@@ -176,6 +218,7 @@ if ($view === 'grid') {
         }
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body { font-family: 'Poppins', sans-serif; background-color: var(--background-color); color: var(--text-color); display: flex; }
+
         .sidebar { width: 260px; background-color: var(--sidebar-color); height: 100vh; position: fixed; left:0; top:0; padding: 2rem 1.5rem; display: flex; flex-direction: column; border-right: 1px solid var(--border-color); z-index: 1000; transition: transform 0.3s ease; }
         .sidebar .logo { font-size: 1.5rem; font-weight: 700; margin-bottom: 3rem; text-align: center; }
         .sidebar .logo span { color: var(--primary-color); }
@@ -186,7 +229,7 @@ if ($view === 'grid') {
         .sidebar nav a:hover, .sidebar nav a.active { background-color: var(--glass-background); color: var(--text-color); }
         .sidebar nav a svg { width: 24px; height: 24px; flex-shrink: 0; }
         .user-profile { position: relative; margin-top: auto; background-color: var(--glass-background); padding: 0.75rem; border-radius: 8px; display: flex; align-items: center; gap: 1rem; cursor: pointer; border: 1px solid transparent; transition: all 0.3s ease; flex-shrink: 0; }
-        .user-profile:hover { border-color: var(--border-color); }
+        .user-profile:hover { border-color: var(--border-color); } /* Corrigido de --primary-color para --border-color */
         .avatar { width: 40px; height: 40px; border-radius: 50%; background-color: var(--primary-color); display: flex; align-items: center; justify-content: center; font-weight: 600; font-size: 1rem; flex-shrink: 0; }
         .user-info { overflow: hidden; }
         .user-info .user-name { font-weight: 600; font-size: 0.9rem; line-height: 1.2; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -195,6 +238,7 @@ if ($view === 'grid') {
         .profile-dropdown.show { visibility: visible; opacity: 1; transform: translateY(0); }
         .profile-dropdown a { display: flex; align-items: center; gap: 0.75rem; padding: 0.75rem; color: var(--text-muted); text-decoration: none; font-size: 0.9rem; border-radius: 6px; }
         .profile-dropdown a:hover { background-color: var(--glass-background); color: var(--text-color); }
+
         .main-content { margin-left: 260px; flex-grow: 1; padding: 2rem 3rem; height: 100vh; overflow-y: auto; transition: margin-left 0.3s ease; width: calc(100% - 260px); }
         .menu-toggle { display: none; position: fixed; top: 1.5rem; left: 1.5rem; z-index: 1001; cursor: pointer; padding: 10px; background-color: var(--sidebar-color); border-radius: 8px; border: 1px solid var(--border-color); }
         .menu-toggle svg { width: 24px; height: 24px; color: var(--text-color); }
@@ -227,6 +271,7 @@ if ($view === 'grid') {
         .course-card-actions a.btn-delete:hover svg { color: var(--delete-color); }
 
         .lesson-manager-header { display: flex; align-items: center; gap: 1rem; margin-bottom: 2rem; flex-wrap: wrap; }
+        .lesson-manager-header h1 { font-size: 1.8rem; }
         .lesson-list { list-style: none; }
         .lesson-item { display: flex; align-items: center; gap: 1rem; background: var(--glass-background); padding: 1rem; border-radius: 8px; margin-bottom: 1rem; border: 1px solid var(--border-color); transition: background 0.2s; }
         .lesson-item:hover { background: rgba(31, 41, 55, 0.8); }
@@ -271,7 +316,6 @@ if ($view === 'grid') {
 
         /* --- RESPONSIVIDADE (Unificada) --- */
         @media (max-width: 1024px) {
-            /* Regras de responsividade da index.php */
             .sidebar { width: 280px; transform: translateX(-280px); box-shadow: 5px 0 15px rgba(0, 0, 0, 0.5); z-index: 1002; }
             .user-profile { margin-top: 1.5rem; position: relative; }
             .menu-toggle { display: flex; }
@@ -290,10 +334,11 @@ if ($view === 'grid') {
              .modal-content { padding: 1rem; }
              .lesson-item { flex-wrap: wrap; align-items: flex-start; }
              .drag-handle { order: 0; }
-             .lesson-item-info { order: 1; width: calc(100% - 40px); margin-bottom: 0.5rem; } /* 40px = espaço do handle */
+             .lesson-item-info { order: 1; width: calc(100% - 40px); /* 40px = espaço do handle */ margin-bottom: 0.5rem; }
              .actions-cell { order: 2; margin-left: auto; }
              .file-entry { flex-wrap: wrap; }
              .file-entry-info { width: 100%; margin-bottom: 0.5rem; }
+             .file-actions { margin-top: 0.5rem; }
         }
     </style>
 </head>
@@ -367,7 +412,7 @@ if ($view === 'grid') {
                              data-curso-id="<?php echo $curso_id_ativo; ?>"
                              data-files='<?php echo htmlspecialchars(json_encode($arquivos_por_aula[$aula['id']] ?? []), ENT_QUOTES, 'UTF-8'); ?>'
                              title="Gerenciar Arquivos Anexados">
-                            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m6.75 12V21a2.25 2.25 0 01-2.25 2.25H6a2.25 2.25 0 01-2.25-2.25V6a2.25 2.25 0 012.25-2.25h2.25m4.5 4.5V12m4.5 4.5v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25" /></svg>
+                            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" style="width:16px; height:16px; margin-right: 5px;"><path stroke-linecap="round" stroke-linejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m6.75 12V21a2.25 2.25 0 01-2.25 2.25H6a2.25 2.25 0 01-2.25-2.25V6a2.25 2.25 0 012.25-2.25h2.25m4.5 4.5V12m4.5 4.5v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25" /></svg>
                             <span><?php echo $file_count; ?> Arquivo(s)</span>
                         </div>
                     </div>
@@ -451,7 +496,7 @@ if ($view === 'grid') {
         if (menuToggle && sidebar) {
             menuToggle.addEventListener('click', (event) => { event.stopPropagation(); body.classList.toggle('sidebar-open'); });
             body.addEventListener('click', (event) => { if (body.classList.contains('sidebar-open') && !sidebar.contains(event.target) && !menuToggle.contains(event.target)) { body.classList.remove('sidebar-open'); } });
-            sidebar.querySelectorAll('nav a').forEach(link => { link.addEventListener('click', () => { if (body.classList.contains('sidebar-open')) { body.classList.remove('sidebar-open'); } }); });
+            sidebar.querySelectorAll('nav a').forEach(link => { link.addEventListener('click', () => { if (window.innerWidth <= 1024) body.classList.remove('sidebar-open'); }); });
         }
         const userProfileMenu = document.getElementById('user-profile-menu');
         const profileDropdown = document.getElementById('profile-dropdown');
@@ -568,6 +613,7 @@ if ($view === 'grid') {
                         htmlContent = '<p style="padding: 1rem; color: var(--text-muted);">Nenhum arquivo anexado ainda.</p>';
                     } else {
                         files.forEach(file => {
+                            // ⭐⭐ SVGs SUBSTITUÍDOS AQUI ⭐⭐
                             htmlContent += `
                                 <div class="file-entry">
                                     <div class="file-entry-info">
