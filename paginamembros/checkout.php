@@ -9,19 +9,22 @@ $usuario_id = (int)$_SESSION['usuario_id'];
 $nome_usuario = htmlspecialchars($_SESSION['usuario_nome']);
 $pagina_atual = basename($_SERVER['PHP_SELF']);
 
+// ⭐ CORREÇÃO 1: INICIALIZAÇÃO DE VARIÁVEIS NA PARTE SUPERIOR
+$produto = null;
+$tipo_produto = null;
+$pixData = null;
+$errorMessage = null;
+$oferta_especial = null;
+$id_produto_comprado = null;
+$tipo_produto_comprado = null;
+
 // --- LÓGICA DA PIXUP (AGORA CARREGADA DO DB) ---
 // Tenta carregar as constantes do DB. Se falhar, usa null.
 $PIXUP_CLIENT_ID = defined('PIXUP_CLIENT_ID') ? PIXUP_CLIENT_ID : null;
 $PIXUP_CLIENT_SECRET = defined('PIXUP_CLIENT_SECRET') ? PIXUP_CLIENT_SECRET : null;
-// ⭐ NOVA CHAVE DO DB
+// ⭐ NOVA CHAVE: Adiciona a constante PIXUP_POSTBACK_URL
 $PIXUP_POSTBACK_URL = defined('PIXUP_POSTBACK_URL') ? PIXUP_POSTBACK_URL : null;
 
-
-// Se as chaves não existirem (falha na migração/leitura do DB), lançamos um erro.
-if (!$PIXUP_CLIENT_ID || !$PIXUP_CLIENT_SECRET) {
-    // Não use 'die' aqui. A lógica do try-catch abaixo deve capturar isso.
-    error_log("ERRO: Chaves PIXUP não carregadas do banco de dados.");
-}
 
 function getPixUpToken(string $clientId, string $clientSecret): string {
     if (isset($_SESSION['pixup_token']) && time() < $_SESSION['pixup_token_expires']) { return $_SESSION['pixup_token']; }
@@ -36,15 +39,12 @@ function getPixUpToken(string $clientId, string $clientSecret): string {
     return $responseData['access_token'];
 }
 
-$pixData = null;
-$errorMessage = null;
-$id_produto_comprado = null;
-$tipo_produto_comprado = null;
 
 // === LÓGICA DE GERAÇÃO DE PIX (POST) ===
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     try {
         // Validação inicial das chaves carregadas (incluindo a nova URL)
+        // Adicionando a checagem do POSTBACK_URL aqui.
         if (!$PIXUP_CLIENT_ID || !$PIXUP_CLIENT_SECRET || !$PIXUP_POSTBACK_URL) {
             throw new Exception("Configurações do Gateway PixUp estão ausentes ou incompletas no sistema. Contate o administrador.");
         }
@@ -87,7 +87,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         // Geração do Token PixUp (usando as constantes carregadas do DB)
         $pixupToken = getPixUpToken($PIXUP_CLIENT_ID, $PIXUP_CLIENT_SECRET);
 
-        // ⭐ USO DA CHAVE PIXUP_POSTBACK_URL CARREGADA DO DB
+        // ⭐ AJUSTE CRÍTICO: USAR A CONSTANTE PIXUP_POSTBACK_URL
         $payload = json_encode(['amount' => (float)$produto['valor'], 'external_id' => (string)$pedidoId, 'postbackUrl' => $PIXUP_POSTBACK_URL, 'payerQuestion' => "Compra de " . $produto['nome'], 'payer' => ['name' => $user['nome'], 'document' => $cpf, 'email' => $user['email']]]);
 
         $ch = curl_init('https://api.pixupbr.com/v2/pix/qrcode');
