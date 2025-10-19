@@ -9,20 +9,23 @@ $usuario_id = (int)$_SESSION['usuario_id'];
 $nome_usuario = htmlspecialchars($_SESSION['usuario_nome']);
 $pagina_atual = basename($_SERVER['PHP_SELF']);
 
-// Usamos as constantes definidas em load_settings.php
+// ⭐ CORREÇÃO 1: INICIALIZAÇÃO DE VARIÁVEIS NA PARTE SUPERIOR
+$produto = null;
+$tipo_produto = null;
+$pixData = null;
+$errorMessage = null;
+$oferta_especial = null;
+$id_produto_comprado = null;
+$tipo_produto_comprado = null;
+
+// --- LÓGICA DA PIXUP (AGORA CARREGADA DO DB) ---
+// Tenta carregar as constantes do DB. Se falhar, usa null.
 $PIXUP_CLIENT_ID = defined('PIXUP_CLIENT_ID') ? PIXUP_CLIENT_ID : null;
 $PIXUP_CLIENT_SECRET = defined('PIXUP_CLIENT_SECRET') ? PIXUP_CLIENT_SECRET : null;
-
-// Se as chaves não existirem (falha na migração/leitura do DB), lançamos um erro.
-if (!$PIXUP_CLIENT_ID || !$PIXUP_CLIENT_SECRET) {
-    // Não use 'die' aqui. A lógica do try-catch abaixo deve capturar isso.
-    error_log("ERRO: Chaves PIXUP não carregadas do banco de dados.");
-}
 
 function getPixUpToken(string $clientId, string $clientSecret): string {
     if (isset($_SESSION['pixup_token']) && time() < $_SESSION['pixup_token_expires']) { return $_SESSION['pixup_token']; }
     $url = 'https://api.pixupbr.com/v2/oauth/token';
-    // O clientId e clientSecret vêm agora do escopo superior (carregados do DB)
     $ch = curl_init($url);
     curl_setopt_array($ch, [CURLOPT_RETURNTRANSFER => true, CURLOPT_POST => true, CURLOPT_HTTPHEADER => ['Authorization: Basic ' . base64_encode($clientId . ':' . $clientSecret)]]);
     $response = curl_exec($ch); $http_code = curl_getinfo($ch, CURLINFO_HTTP_CODE); curl_close($ch);
@@ -33,15 +36,11 @@ function getPixUpToken(string $clientId, string $clientSecret): string {
     return $responseData['access_token'];
 }
 
-$pixData = null;
-$errorMessage = null;
-$id_produto_comprado = null;
-$tipo_produto_comprado = null;
 
 // === LÓGICA DE GERAÇÃO DE PIX (POST) ===
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     try {
-        // Validação inicial das chaves carregadas
+        // ⭐ Corrigido o erro de Configuração do Gateway
         if (!$PIXUP_CLIENT_ID || !$PIXUP_CLIENT_SECRET) {
             throw new Exception("Configurações do Gateway PixUp estão ausentes no sistema. Contate o administrador.");
         }
@@ -54,15 +53,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
         $pdo->beginTransaction();
 
-        $produto = null;
+        $produto = null; // Re-inicializa $produto para o bloco POST
         if ($productType === 'curso') {
             $stmt = $pdo->prepare("SELECT id, titulo AS nome, valor FROM cursos WHERE id = ?");
             $stmt->execute([$productId]);
             $produto = $stmt->fetch(PDO::FETCH_ASSOC);
+            $tipo_produto = 'curso';
         } else {
             $stmt = $pdo->prepare("SELECT id, nome, valor FROM planos WHERE id = ?");
             $stmt->execute([$productId]);
             $produto = $stmt->fetch(PDO::FETCH_ASSOC);
+            $tipo_produto = 'plano';
         }
 
         $stmtUser = $pdo->prepare("SELECT nome, email FROM usuarios WHERE id = ?");
@@ -79,7 +80,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
         if (!$pedidoId) throw new Exception('Falha ao registrar o pedido local.');
 
-        // Geração do Token PixUp (usando as variáveis carregadas do DB)
+        // Geração do Token PixUp (usando as constantes carregadas do DB)
         $pixupToken = getPixUpToken($PIXUP_CLIENT_ID, $PIXUP_CLIENT_SECRET);
 
         $payload = json_encode(['amount' => (float)$produto['valor'], 'external_id' => (string)$pedidoId, 'postbackUrl' => "https://sitedemembros-1.onrender.com/paginamembros/api/webhook_pixup_cursos.php", 'payerQuestion' => "Compra de " . $produto['nome'], 'payer' => ['name' => $user['nome'], 'document' => $cpf, 'email' => $user['email']]]);
@@ -108,19 +109,35 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     } catch (Exception $e) {
         if ($pdo->inTransaction()) $pdo->rollBack();
         $errorMessage = $e->getMessage();
+        // Se a geração PIX falhar, $produto ainda precisa ser carregado para a seção de exibição
+
+        // ⭐ NOVO: RECUPERA O PRODUTO APÓS FALHA NO POST para exibir o resumo
+        $id = (int)($_POST['product_id'] ?? 0);
+        $type = (string)($_POST['product_type'] ?? '');
+        if ($id > 0) {
+            if ($type === 'curso') {
+                $stmt = $pdo->prepare("SELECT id, titulo AS nome, valor FROM cursos WHERE id = ?");
+                $stmt->execute([$id]);
+                $produto = $stmt->fetch(PDO::FETCH_ASSOC);
+            } elseif ($type === 'plano') {
+                $stmt = $pdo->prepare("SELECT id, nome, valor FROM planos WHERE id = ?");
+                $stmt->execute([$id]);
+                $produto = $stmt->fetch(PDO::FETCH_ASSOC);
+            }
+        }
     }
 }
 
-// === LÓGICA DE EXIBIÇÃO (GET) ===
-$oferta_especial = null;
-if ($_SERVER['REQUEST_METHOD'] === 'GET') {
-    $produto = null;
-    $tipo_produto = null;
+// === LÓGICA DE EXIBIÇÃO (GET E FALLBACK) ===
+// Esta seção garante que $produto seja carregado se não foi definido pelo POST
+if (!$produto) {
     if (isset($_GET['curso_id'])) {
         $stmt = $pdo->prepare("SELECT id, titulo AS nome, valor FROM cursos WHERE id = ?");
         $stmt->execute([(int)$_GET['curso_id']]);
         $produto = $stmt->fetch(PDO::FETCH_ASSOC);
         $tipo_produto = 'curso';
+
+        // Carrega a oferta especial se for compra de curso individual
         $stmt_oferta = $pdo->query("SELECT id, nome, valor FROM planos WHERE tipo_acesso = 'TODOS_CURSOS' LIMIT 1");
         $oferta_especial = $stmt_oferta->fetch(PDO::FETCH_ASSOC);
     } elseif (isset($_GET['plano_id'])) {
@@ -129,7 +146,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
         $produto = $stmt->fetch(PDO::FETCH_ASSOC);
         $tipo_produto = 'plano';
     }
-    if (!$produto) { header("Location: comprar_cursos.php"); exit; }
+}
+
+
+// VERIFICAÇÃO FINAL: Se o produto não foi carregado por nenhum caminho (POST falho ou GET inválido), redireciona
+if (!$produto) {
+    header("Location: comprar_cursos.php");
+    exit;
 }
 ?>
 <!DOCTYPE html>
@@ -344,8 +367,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
                         <div id="qr-code-container"></div>
                         <input type="text" id="pix-code-input" value="<?php echo htmlspecialchars($pixData['pix_copy_paste_code']); ?>" readonly>
                         <button id="copy-btn">
-                           <svg fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24" width="20"><path stroke-linecap="round" stroke-linejoin="round" d="M15.75 17.25v3.375c0 .621-.504 1.125-1.125 1.125h-9.75a1.125 1.125 0 01-1.125-1.125V7.875c0-.621.504-1.125 1.125-1.125H6.75a9.06 9.06 0 011.5.124M10.5 18.75v-5.25c0-.621.504-1.125 1.125-1.125h5.25c.621 0 1.125.504 1.125 1.125v5.25c0 .621-.504 1.125-1.125-1.125h-5.25a1.125 1.125 0 01-1.125-1.125z"></path><path stroke-linecap="round" stroke-linejoin="round" d="M16.5 5.25v-1.5a1.125 1.125 0 00-1.125-1.125H6.75a1.125 1.125 0 00-1.125 1.125v9.75c0 .621.504 1.125 1.125 1.125h1.5"></path></svg>
-                           <span>Copiar Código</span>
+                            <svg fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24" width="20"><path stroke-linecap="round" stroke-linejoin="round" d="M15.75 17.25v3.375c0 .621-.504 1.125-1.125 1.125h-9.75a1.125 1.125 0 01-1.125-1.125V7.875c0-.621.504-1.125 1.125-1.125H6.75a9.06 9.06 0 011.5.124M10.5 18.75v-5.25c0-.621.504-1.125 1.125-1.125h5.25c.621 0 1.125.504 1.125 1.125v5.25c0 .621-.504 1.125-1.125-1.125h-5.25a1.125 1.125 0 01-1.125-1.125z"></path><path stroke-linecap="round" stroke-linejoin="round" d="M16.5 5.25v-1.5a1.125 1.125 0 00-1.125-1.125H6.75a1.125 1.125 0 00-1.125 1.125v9.75c0 .621.504 1.125 1.125 1.125h1.5"></path></svg>
+                            <span>Copiar Código</span>
                         </button>
                         <p class="pix-timer">Este código expira em <span id="pix-countdown">10:00</span></p>
                     </div>

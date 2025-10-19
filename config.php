@@ -71,15 +71,16 @@ try {
     ]);
 
     // ⭐ PASSO 1: CHAMADA AUTOMÁTICA DA MIGRAÇÃO
-    if (file_exists('migrations.php')) {
-        require_once 'migrations.php';
+    // Usa __DIR__ para garantir o caminho absoluto
+    if (file_exists(__DIR__ . '/migrations.php')) {
+        require_once __DIR__ . '/migrations.php';
         run_migrations($pdo);
     }
 
     // ⭐ PASSO 2: CARREGAR AS CONFIGURAÇÕES DO BANCO (LOAD_SETTINGS)
-    // O load_settings deve estar no mesmo nível ou ser referenciado corretamente
-    if (file_exists('load_settings.php')) {
-        require_once 'load_settings.php';
+    // Usa __DIR__ para garantir o caminho absoluto
+    if (file_exists(__DIR__ . '/load_settings.php')) {
+        require_once __DIR__ . '/load_settings.php';
     }
 
 
