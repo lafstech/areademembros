@@ -24,8 +24,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $plano_id = (int)($_POST['plano_id'] ?? 0);
             $nome = trim((string)($_POST['nome'] ?? ''));
             $descricao = trim((string)($_POST['descricao'] ?? ''));
-            $valor = str_replace(',', '.', (string)($_POST['valor'] ?? '0'));
-            $valor = (float)filter_var($valor, FILTER_SANITIZE_NUMBER_FLOAT, FILTER_FLAG_ALLOW_FRACTION);
+            // Converte valor BRL (197,00) para formato SQL (197.00)
+            $valor_brl = (string)($_POST['valor'] ?? '0');
+            $valor_sql = str_replace('.', '', $valor_brl); // Remove separador de milhar
+            $valor_sql = str_replace(',', '.', $valor_sql); // Troca vírgula por ponto
+
+            $valor = (float)filter_var($valor_sql, FILTER_SANITIZE_NUMBER_FLOAT, FILTER_FLAG_ALLOW_FRACTION);
 
             if (empty($nome) || $valor < 0) {
                 throw new Exception("Nome e valor válido são obrigatórios para o plano.");
@@ -48,10 +52,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             if (!empty($valores)) {
                 $pdo->beginTransaction();
                 $stmt = $pdo->prepare("UPDATE cursos SET valor = ? WHERE id = ?");
-                foreach ($valores as $curso_id => $novo_valor) {
+                foreach ($valores as $curso_id => $novo_valor_brl) {
                     $curso_id_sanitized = (int)$curso_id;
-                    $novo_valor_sanitized = str_replace(',', '.', (string)$novo_valor);
-                    $novo_valor_sanitized = (float)filter_var($novo_valor_sanitized, FILTER_SANITIZE_NUMBER_FLOAT, FILTER_FLAG_ALLOW_FRACTION);
+                    // Converte valor BRL (49,90) para formato SQL (49.90)
+                    $novo_valor_sql = str_replace('.', '', $novo_valor_brl);
+                    $novo_valor_sql = str_replace(',', '.', $novo_valor_sql);
+                    $novo_valor_sanitized = (float)filter_var($novo_valor_sql, FILTER_SANITIZE_NUMBER_FLOAT, FILTER_FLAG_ALLOW_FRACTION);
+
                     if ($curso_id_sanitized > 0 && $novo_valor_sanitized >= 0) {
                         $stmt->execute([$novo_valor_sanitized, $curso_id_sanitized]);
                     }
@@ -115,17 +122,29 @@ $vendas_por_curso = $pdo->query("
     ORDER BY total_valor DESC
 ")->fetchAll(PDO::FETCH_ASSOC);
 
+// ⭐ CORREÇÃO AQUI: Busca de vendas do plano (para a tabela)
+$vendas_plano_raw = $pdo->query("
+    SELECT COUNT(p.id) as num_vendas, SUM(p.valor) as total_valor
+    FROM pedidos p
+    WHERE p.plano_id IS NOT NULL AND p.status = 'APROVADO'
+")->fetch(PDO::FETCH_ASSOC);
+
+
 // Transações Recentes
+// ⭐ CORREÇÃO AQUI: Trocado p.data_criacao por p.created_at
+// ⭐ E Adicionado u.email para exibição
 $recent_transactions = $pdo->query("
-    SELECT p.id, p.data_criacao, p.valor, u.nome as usuario_nome, COALESCE(c.titulo, pl.nome) as produto_nome
+    SELECT p.id, p.created_at, p.valor, u.nome as usuario_nome, u.email as usuario_email,
+           COALESCE(c.titulo, pl.nome) as produto_nome
     FROM pedidos p
     JOIN usuarios u ON p.usuario_id = u.id
     LEFT JOIN cursos c ON p.curso_id = c.id
     LEFT JOIN planos pl ON p.plano_id = pl.id
     WHERE p.status = 'APROVADO'
-    ORDER BY p.data_criacao DESC
+    ORDER BY p.created_at DESC
     LIMIT 10
 ")->fetchAll(PDO::FETCH_ASSOC);
+
 ?>
 <!DOCTYPE html>
 <html lang="pt-br">
@@ -140,6 +159,7 @@ $recent_transactions = $pdo->query("
             --primary-color: #e11d48; --background-color: #111827; --sidebar-color: #1f2937;
             --glass-background: rgba(31, 41, 55, 0.5); --text-color: #f9fafb; --text-muted: #9ca3af;
             --border-color: rgba(255, 255, 255, 0.1); --success-color: #22c55e; --error-color: #f87171;
+            --info-color: #3b82f6; /* Adicionado para consistência */
         }
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body { font-family: 'Poppins', sans-serif; background-color: var(--background-color); color: var(--text-color); display: flex; }
@@ -184,7 +204,7 @@ $recent_transactions = $pdo->query("
         .management-card h2 { font-size: 1.5rem; margin-bottom: 1.5rem; border-bottom: 1px solid var(--border-color); padding-bottom: 1rem; }
         .form-group { margin-bottom: 1.5rem; }
         .form-group label { display: block; font-weight: 600; margin-bottom: 0.5rem; }
-        .form-group input, .form-group textarea { width: 100%; padding: 0.75rem 1rem; background-color: rgba(0,0,0,0.3); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-color); font-size: 1rem; font-family: 'Poppins', sans-serif; }
+        .form-group input, .form-group textarea { width: 100%; padding: 0.75rem 1rem; background-color: var(--background-color); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-color); font-size: 1rem; font-family: 'Poppins', sans-serif; }
         .form-group textarea { resize: vertical; min-height: 100px; }
         .form-group input:focus, .form-group textarea:focus { border-color: var(--primary-color); outline: none; }
         .btn-save { padding: 0.8rem 2rem; background-color: var(--primary-color); color: white; border: none; border-radius: 8px; cursor: pointer; font-weight: 600; font-size: 1rem; transition: background-color 0.3s; }
@@ -262,12 +282,12 @@ $recent_transactions = $pdo->query("
 
             <div class="left-column">
                 <section class="management-card">
-                    <h2>Vendas por Curso</h2>
+                    <h2>Vendas por Produto</h2>
                     <div class="table-wrapper">
                         <table class="data-table">
-                            <thead><tr><th>Curso</th><th>Vendas</th><th>Total (R$)</th></tr></thead>
+                            <thead><tr><th>Produto</th><th>Vendas</th><th>Total (R$)</th></tr></thead>
                             <tbody>
-                                <?php if ($plano_acesso_total && $vendas_plano_raw['num_vendas'] > 0): ?>
+                                <?php if ($plano_acesso_total && ($vendas_plano_raw['num_vendas'] ?? 0) > 0): ?>
                                     <tr>
                                         <td><strong><?php echo htmlspecialchars($plano_acesso_total['nome']); ?></strong></td>
                                         <td><?php echo $vendas_plano_raw['num_vendas']; ?></td>
@@ -281,7 +301,7 @@ $recent_transactions = $pdo->query("
                                         <td>R$ <?php echo number_format($venda['total_valor'], 2, ',', '.'); ?></td>
                                     </tr>
                                 <?php endforeach; ?>
-                                <?php if (empty($vendas_por_curso) && $vendas_plano_raw['num_vendas'] == 0): ?>
+                                <?php if (empty($vendas_por_curso) && ($vendas_plano_raw['num_vendas'] ?? 0) == 0): ?>
                                     <tr><td colspan="3" style="text-align: center; color: var(--text-muted);">Nenhuma venda aprovada ainda.</td></tr>
                                 <?php endif; ?>
                             </tbody>
@@ -290,7 +310,7 @@ $recent_transactions = $pdo->query("
                 </section>
 
                 <section class="management-card">
-                    <h2>Últimas 10 Transações</h2>
+                    <h2>Últimas 10 Transações (Aprovadas)</h2>
                     <div class="table-wrapper">
                         <table class="data-table">
                             <thead><tr><th>ID</th><th>Usuário</th><th>Produto</th><th>Valor</th><th>Data</th></tr></thead>
@@ -300,11 +320,11 @@ $recent_transactions = $pdo->query("
                                     <td>#<?php echo $tx['id']; ?></td>
                                     <td>
                                         <?php echo htmlspecialchars($tx['usuario_nome']); ?>
-                                        <span class="user-email"><?php echo htmlspecialchars($tx['email'] ?? 'Email não encontrado'); ?></span>
+                                        <span class="user-email"><?php echo htmlspecialchars($tx['usuario_email'] ?? 'Email não encontrado'); ?></span>
                                     </td>
                                     <td><?php echo htmlspecialchars($tx['produto_nome']); ?></td>
                                     <td>R$ <?php echo number_format((float)$tx['valor'], 2, ',', '.'); ?></td>
-                                    <td><?php echo date("d/m/Y H:i", strtotime($tx['data_criacao'])); ?></td>
+                                    <td><?php echo date("d/m/Y H:i", strtotime($tx['created_at'])); ?></td>
                                 </tr>
                                 <?php endforeach; ?>
                                 <?php if (empty($recent_transactions)): ?>
@@ -344,7 +364,8 @@ $recent_transactions = $pdo->query("
                     <form method="POST" action="">
                         <input type="hidden" name="action" value="update_courses">
                         <div class="table-wrapper">
-                            <table class="data-table table-cursos"> <thead><tr><th>Curso</th><th>Valor (R$)</th></tr></thead>
+                            <table class="data-table">
+                                <thead><tr><th>Curso</th><th>Valor (R$)</th></tr></thead>
                                 <tbody>
                                     <?php foreach ($todos_cursos as $curso): ?>
                                         <tr>
@@ -352,10 +373,13 @@ $recent_transactions = $pdo->query("
                                             <td><input type="text" name="valores[<?php echo $curso['id']; ?>]" value="<?php echo number_format((float)$curso['valor'], 2, ',', '.'); ?>" required></td>
                                         </tr>
                                     <?php endforeach; ?>
+                                    <?php if (empty($todos_cursos)): ?>
+                                        <tr><td colspan="2" style="text-align: center; color: var(--text-muted);">Nenhum curso cadastrado.</td></tr>
+                                    <?php endif; ?>
                                 </tbody>
                             </table>
                         </div>
-                        <button type="submit" class="btn-save" style="margin-top: 1.5rem;">Salvar Valores dos Cursos</button>
+                        <button type="submit" class="btn-save" style="margin-top: 1.5rem;" <?php if (empty($todos_cursos)) echo 'disabled'; ?>>Salvar Valores dos Cursos</button>
                     </form>
                 </section>
             </div>
@@ -399,6 +423,29 @@ $recent_transactions = $pdo->query("
                 }
             });
         }
+
+        // --- Lógica para formatar campos de valor como BRL (opcional, mas recomendado) ---
+        function formatarCampoBRL(input) {
+            let valor = input.value.replace(/\D/g, ''); // Remove tudo que não for dígito
+            valor = (parseInt(valor, 10) / 100).toFixed(2).replace('.', ',');
+
+            // Adiciona separador de milhar
+            let partes = valor.split(',');
+            partes[0] = partes[0].replace(/\B(?=(\d{3})+(?!\d))/g, '.');
+
+            input.value = partes.join(',');
+        }
+
+        // Aplica a máscara em todos os inputs de valor
+        document.querySelectorAll('#plano-valor, .data-table input[name^="valores["]').forEach(input => {
+            input.addEventListener('keyup', (e) => {
+                // Evita que a máscara rode em teclas não-numéricas (como setas)
+                if (e.key >= 0 && e.key <= 9 || e.key === 'Backspace' || e.key === 'Delete') {
+                    formatarCampoBRL(e.target);
+                }
+            });
+        });
+
     });
     </script>
 </body>
