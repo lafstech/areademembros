@@ -264,6 +264,7 @@ function run_migrations($pdo) {
             'MAILGUN_API_URL' => ['https://api.mailgun.net/v3', 'Endpoint da API da Mailgun (US).'],
             'PIXUP_CLIENT_ID' => ['notfakeluccas_2735058915962624', 'ID do Cliente PixUp.'],
             'PIXUP_CLIENT_SECRET' => ['3e56523361cb1b25b2074302ed1e93e5111f62c948111250deacf67877838062', 'Chave secreta do Cliente PixUp.'],
+            'PIXUP_POSTBACK_URL' => ['https://sitedemembros-1.onrender.com/paginamembros/api/webhook_pixup_cursos.php', 'URL de Webhook (Postback) do PixUp para confirmar pagamentos.'],
         ];
 
         foreach ($config_keys as $chave => list($valor, $descricao)) {

@@ -9,19 +9,19 @@ $usuario_id = (int)$_SESSION['usuario_id'];
 $nome_usuario = htmlspecialchars($_SESSION['usuario_nome']);
 $pagina_atual = basename($_SERVER['PHP_SELF']);
 
-// ⭐ CORREÇÃO 1: INICIALIZAÇÃO DE VARIÁVEIS NA PARTE SUPERIOR
-$produto = null;
-$tipo_produto = null;
-$pixData = null;
-$errorMessage = null;
-$oferta_especial = null;
-$id_produto_comprado = null;
-$tipo_produto_comprado = null;
-
 // --- LÓGICA DA PIXUP (AGORA CARREGADA DO DB) ---
 // Tenta carregar as constantes do DB. Se falhar, usa null.
 $PIXUP_CLIENT_ID = defined('PIXUP_CLIENT_ID') ? PIXUP_CLIENT_ID : null;
 $PIXUP_CLIENT_SECRET = defined('PIXUP_CLIENT_SECRET') ? PIXUP_CLIENT_SECRET : null;
+// ⭐ NOVA CHAVE DO DB
+$PIXUP_POSTBACK_URL = defined('PIXUP_POSTBACK_URL') ? PIXUP_POSTBACK_URL : null;
+
+
+// Se as chaves não existirem (falha na migração/leitura do DB), lançamos um erro.
+if (!$PIXUP_CLIENT_ID || !$PIXUP_CLIENT_SECRET) {
+    // Não use 'die' aqui. A lógica do try-catch abaixo deve capturar isso.
+    error_log("ERRO: Chaves PIXUP não carregadas do banco de dados.");
+}
 
 function getPixUpToken(string $clientId, string $clientSecret): string {
     if (isset($_SESSION['pixup_token']) && time() < $_SESSION['pixup_token_expires']) { return $_SESSION['pixup_token']; }
@@ -36,13 +36,17 @@ function getPixUpToken(string $clientId, string $clientSecret): string {
     return $responseData['access_token'];
 }
 
+$pixData = null;
+$errorMessage = null;
+$id_produto_comprado = null;
+$tipo_produto_comprado = null;
 
 // === LÓGICA DE GERAÇÃO DE PIX (POST) ===
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     try {
-        // ⭐ Corrigido o erro de Configuração do Gateway
-        if (!$PIXUP_CLIENT_ID || !$PIXUP_CLIENT_SECRET) {
-            throw new Exception("Configurações do Gateway PixUp estão ausentes no sistema. Contate o administrador.");
+        // Validação inicial das chaves carregadas (incluindo a nova URL)
+        if (!$PIXUP_CLIENT_ID || !$PIXUP_CLIENT_SECRET || !$PIXUP_POSTBACK_URL) {
+            throw new Exception("Configurações do Gateway PixUp estão ausentes ou incompletas no sistema. Contate o administrador.");
         }
 
         $productId = (int)($_POST['product_id'] ?? 0);
@@ -83,7 +87,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         // Geração do Token PixUp (usando as constantes carregadas do DB)
         $pixupToken = getPixUpToken($PIXUP_CLIENT_ID, $PIXUP_CLIENT_SECRET);
 
-        $payload = json_encode(['amount' => (float)$produto['valor'], 'external_id' => (string)$pedidoId, 'postbackUrl' => "https://sitedemembros-1.onrender.com/paginamembros/api/webhook_pixup_cursos.php", 'payerQuestion' => "Compra de " . $produto['nome'], 'payer' => ['name' => $user['nome'], 'document' => $cpf, 'email' => $user['email']]]);
+        // ⭐ USO DA CHAVE PIXUP_POSTBACK_URL CARREGADA DO DB
+        $payload = json_encode(['amount' => (float)$produto['valor'], 'external_id' => (string)$pedidoId, 'postbackUrl' => $PIXUP_POSTBACK_URL, 'payerQuestion' => "Compra de " . $produto['nome'], 'payer' => ['name' => $user['nome'], 'document' => $cpf, 'email' => $user['email']]]);
 
         $ch = curl_init('https://api.pixupbr.com/v2/pix/qrcode');
         curl_setopt_array($ch, [CURLOPT_RETURNTRANSFER => true, CURLOPT_POST => true, CURLOPT_POSTFIELDS => $payload, CURLOPT_HTTPHEADER => ["Authorization: Bearer {$pixupToken}", "Content-Type: application/json"]]);
@@ -109,9 +114,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     } catch (Exception $e) {
         if ($pdo->inTransaction()) $pdo->rollBack();
         $errorMessage = $e->getMessage();
-        // Se a geração PIX falhar, $produto ainda precisa ser carregado para a seção de exibição
 
-        // ⭐ NOVO: RECUPERA O PRODUTO APÓS FALHA NO POST para exibir o resumo
+        // RECUPERA O PRODUTO APÓS FALHA NO POST para exibir o resumo
         $id = (int)($_POST['product_id'] ?? 0);
         $type = (string)($_POST['product_type'] ?? '');
         if ($id > 0) {
