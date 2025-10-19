@@ -13,7 +13,7 @@ $successMessage = null;
 $errorMessage = null;
 
 // ===================================================================
-// === LÓGICA DE ATUALIZAÇÃO (POST) - (Inalterada) ===
+// === LÓGICA DE ATUALIZAÇÃO (POST) ===
 // ===================================================================
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     try {
@@ -40,6 +40,31 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $successMessage = "Plano de Acesso Total criado com sucesso!";
             }
         }
+
+        // ⭐ NOVO: AÇÃO DE DELETAR PLANO
+        elseif ($action === 'delete_plan') {
+            $plano_id_del = (int)($_POST['plano_id_del'] ?? 0);
+            if ($plano_id_del > 0) {
+                // Opcional: Adicionar verificação se há vendas ativas neste plano antes de deletar
+                // $check = $pdo->prepare("SELECT COUNT(id) FROM pedidos WHERE plano_id = ? AND status = 'APROVADO'");
+                // $check->execute([$plano_id_del]);
+                // if ($check->fetchColumn() > 0) {
+                //     throw new Exception("Não é possível deletar este plano, pois existem vendas ativas associadas a ele.");
+                // }
+
+                $stmt = $pdo->prepare("DELETE FROM planos WHERE id = ? AND tipo_acesso = 'TODOS_CURSOS'");
+                $stmt->execute([$plano_id_del]);
+
+                if ($stmt->rowCount() > 0) {
+                    $successMessage = "Plano deletado com sucesso!";
+                } else {
+                    throw new Exception("Plano não encontrado ou não pôde ser deletado.");
+                }
+            } else {
+                throw new Exception("ID do plano inválido para deleção.");
+            }
+        }
+
         // --- AÇÃO: ATUALIZAR OS VALORES DOS CURSOS ---
         elseif ($action === 'update_courses') {
             $valores = $_POST['valores'] ?? [];
@@ -76,17 +101,24 @@ $stats_aprovado = $pdo->query("
     FROM pedidos WHERE status = 'APROVADO'
 ")->fetch(PDO::FETCH_ASSOC);
 
-// ⭐ NOVO: Stats de Vendas Pendentes
 $stats_pendente = $pdo->query("
     SELECT COALESCE(SUM(valor), 0) as valor_pendente, COUNT(id) as total_pendentes
     FROM pedidos WHERE status = 'PENDENTE'
 ")->fetch(PDO::FETCH_ASSOC);
 
-// ⭐ NOVO: Contagem de Planos Criados
 $total_planos_criados = $pdo->query("SELECT COUNT(id) FROM planos WHERE tipo_acesso = 'TODOS_CURSOS'")->fetchColumn();
 
 // --- DADOS PARA OS FORMULÁRIOS DE GERENCIAMENTO ---
-$plano_acesso_total = $pdo->query("SELECT * FROM planos WHERE tipo_acesso = 'TODOS_CURSOS' LIMIT 1")->fetch(PDO::FETCH_ASSOC);
+// Busca o *primeiro* plano para pré-popular o formulário da direita
+$plano_acesso_total = $pdo->query("SELECT * FROM planos WHERE tipo_acesso = 'TODOS_CURSOS' ORDER BY id ASC LIMIT 1")->fetch(PDO::FETCH_ASSOC);
+
+// ⭐ NOVO: Busca *TODOS* os planos para o modal de gerenciamento
+$todos_planos = $pdo->query("
+    SELECT * FROM planos
+    WHERE tipo_acesso = 'TODOS_CURSOS'
+    ORDER BY id DESC
+")->fetchAll(PDO::FETCH_ASSOC);
+
 $todos_cursos = $pdo->query("SELECT id, titulo, valor FROM cursos ORDER BY titulo ASC")->fetchAll(PDO::FETCH_ASSOC);
 
 // --- DADOS PARA TABELAS DE VENDAS ---
@@ -103,7 +135,7 @@ $vendas_plano_raw = $pdo->query("
     FROM pedidos p WHERE p.plano_id IS NOT NULL AND p.status = 'APROVADO'
 ")->fetch(PDO::FETCH_ASSOC);
 
-// Transações Aprovadas Recentes (Corrigido para p.created_at)
+// Transações Aprovadas Recentes
 $recent_transactions_aprovadas = $pdo->query("
     SELECT p.id, p.created_at, p.valor, u.nome as usuario_nome, u.email as usuario_email,
            COALESCE(c.titulo, pl.nome) as produto_nome
@@ -116,7 +148,7 @@ $recent_transactions_aprovadas = $pdo->query("
     LIMIT 5
 ")->fetchAll(PDO::FETCH_ASSOC);
 
-// ⭐ NOVO: Transações Pendentes Recentes (Corrigido para p.created_at)
+// Transações Pendentes Recentes
 $recent_transactions_pendentes = $pdo->query("
     SELECT p.id, p.created_at, p.valor, u.nome as usuario_nome, u.email as usuario_email,
            COALESCE(c.titulo, pl.nome) as produto_nome
@@ -143,7 +175,7 @@ $recent_transactions_pendentes = $pdo->query("
             --primary-color: #e11d48; --background-color: #111827; --sidebar-color: #1f2937;
             --glass-background: rgba(31, 41, 55, 0.5); --text-color: #f9fafb; --text-muted: #9ca3af;
             --border-color: rgba(255, 255, 255, 0.1); --success-color: #22c55e; --error-color: #f87171;
-            --info-color: #3b82f6; --warning-color: #f59e0b; /* Adicionado Warning */
+            --info-color: #3b82f6; --warning-color: #f59e0b;
         }
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body { font-family: 'Poppins', sans-serif; background-color: var(--background-color); color: var(--text-color); display: flex; }
@@ -177,11 +209,22 @@ $recent_transactions_pendentes = $pdo->query("
 
         /* === ESTILOS ESPECÍFICOS (index.php + financascursos.php) === */
         .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 1.5rem; margin-bottom: 2.5rem; }
-        .stat-card { background: var(--glass-background); padding: 1.5rem; border-radius: 12px; border: 1px solid var(--border-color); display: flex; align-items: center; gap: 1.5rem; }
+        .stat-card { background: var(--glass-background); padding: 1.5rem; border-radius: 12px; border: 1px solid var(--border-color); display: flex; align-items: center; gap: 1.5rem; transition: all 0.3s ease; /* ⭐ Adicionado transition */ }
         .stat-card .icon-wrapper { width: 60px; height: 60px; border-radius: 50%; display: flex; align-items: center; justify-content: center; background: rgba(225, 29, 72, 0.1); border: 1px solid rgba(225, 29, 72, 0.3); flex-shrink: 0; }
         .stat-card .icon-wrapper svg { width: 28px; height: 28px; color: var(--primary-color); }
         .stat-info .stat-number { font-size: 2rem; font-weight: 700; line-height: 1.2; }
         .stat-info .stat-label { font-size: 0.9rem; color: var(--text-muted); }
+
+        /* ⭐ Adicionado para card clicável de Planos */
+        a.stat-card-link { text-decoration: none; color: inherit; }
+        #open-planos-modal .stat-card {
+            cursor: pointer;
+        }
+        #open-planos-modal .stat-card:hover {
+            border-color: var(--primary-color);
+            transform: translateY(-3px);
+            box-shadow: 0 4px 15px rgba(0,0,0,0.2);
+        }
 
         .dashboard-grid { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); gap: 1.5rem; }
         .management-card { background: var(--glass-background); border: 1px solid var(--border-color); border-radius: 12px; padding: 2rem; margin-bottom: 2rem; }
@@ -207,6 +250,95 @@ $recent_transactions_pendentes = $pdo->query("
         .alert-success { background-color: rgba(34, 197, 94, 0.2); color: var(--success-color); }
         .alert-error { background-color: rgba(248, 113, 113, 0.2); color: var(--error-color); }
 
+        /* ⭐ --- CSS Modal Planos --- */
+        .modal {
+            display: none; /* Oculto por padrão */
+            position: fixed;
+            z-index: 1005; /* Acima do overlay da sidebar */
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            overflow: auto;
+            background-color: rgba(0, 0, 0, 0.7);
+            backdrop-filter: blur(5px);
+        }
+        .modal-content {
+            background-color: var(--sidebar-color);
+            margin: 10% auto;
+            padding: 2rem;
+            border: 1px solid var(--border-color);
+            width: 90%;
+            max-width: 800px;
+            border-radius: 12px;
+            position: relative;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+        }
+        .modal-close {
+            color: var(--text-muted);
+            position: absolute;
+            top: 1rem;
+            right: 1.5rem;
+            font-size: 2rem;
+            font-weight: bold;
+            cursor: pointer;
+            line-height: 1;
+        }
+        .modal-close:hover,
+        .modal-close:focus {
+            color: var(--text-color);
+        }
+        .modal-content h2 {
+            font-size: 1.8rem;
+            margin-bottom: 1.5rem;
+            border-bottom: 1px solid var(--border-color);
+            padding-bottom: 1rem;
+        }
+        .btn-edit {
+            padding: 0.5rem 1rem;
+            background-color: var(--info-color);
+            color: white;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-weight: 500;
+            font-size: 0.9rem;
+            text-decoration: none;
+            display: inline-block;
+            margin-right: 0.5rem;
+            transition: background-color 0.3s;
+        }
+        .btn-edit:hover { background-color: #2563eb; }
+        .btn-delete {
+            padding: 0.5rem 1rem;
+            background-color: var(--error-color);
+            color: white;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-weight: 500;
+            font-size: 0.9rem;
+            transition: background-color 0.3s;
+        }
+        .btn-delete:hover { background-color: #e11d48; }
+        .btn-new-plan {
+            padding: 0.7rem 1.5rem;
+            background-color: var(--success-color);
+            color: white;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-weight: 600;
+            font-size: 1rem;
+            transition: background-color 0.3s;
+            text-decoration: none;
+            display: inline-block;
+            margin-top: 1.5rem;
+        }
+        .btn-new-plan:hover { background-color: #1a9c4b; }
+        .plan-actions { display: flex; align-items: center; gap: 0.5rem; }
+
+
         /* --- RESPONSIVIDADE (Unificada) --- */
         @media (max-width: 1024px) {
             .sidebar { width: 280px; transform: translateX(-280px); box-shadow: 5px 0 15px rgba(0, 0, 0, 0.5); z-index: 1002; }
@@ -224,6 +356,7 @@ $recent_transactions_pendentes = $pdo->query("
              .main-content { padding: 1rem; padding-top: 4.5rem; }
              .stat-card { flex-direction: column; align-items: flex-start; }
              .data-table td input[type="text"] { width: 100px; }
+             .modal-content { margin: 5% auto; }
         }
     </style>
 </head>
@@ -264,10 +397,13 @@ $recent_transactions_pendentes = $pdo->query("
                     <div class="stat-label" style="font-size: 0.8rem; color: var(--warning-color);">(R$ <?php echo number_format((float)$stats_pendente['valor_pendente'], 2, ',', '.'); ?>)</div>
                 </div>
             </div>
-             <div class="stat-card">
-                <div class="icon-wrapper"><svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M16.5 10.5V6.75a4.5 4.5 0 10-9 0v3.75m-.75 11.25h10.5a2.25 2.25 0 002.25-2.25v-6.75a2.25 2.25 0 00-2.25-2.25H6.75a2.25 2.25 0 00-2.25 2.25v6.75a2.25 2.25 0 002.25 2.25z" /></svg></div>
-                <div class="stat-info"><div class="stat-number"><?php echo $total_planos_criados; ?></div><div class="stat-label">Planos Criados</div></div>
-            </div>
+
+            <a href="#" class="stat-card-link" id="open-planos-modal">
+                <div class="stat-card">
+                    <div class="icon-wrapper"><svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M16.5 10.5V6.75a4.5 4.5 0 10-9 0v3.75m-.75 11.25h10.5a2.25 2.25 0 002.25-2.25v-6.75a2.25 2.25 0 00-2.25-2.25H6.75a2.25 2.25 0 00-2.25 2.25v6.75a2.25 2.25 0 002.25 2.25z" /></svg></div>
+                    <div class="stat-info"><div class="stat-number"><?php echo $total_planos_criados; ?></div><div class="stat-label">Planos Criados</div></div>
+                </div>
+            </a>
         </section>
 
         <div class="dashboard-grid">
@@ -279,22 +415,63 @@ $recent_transactions_pendentes = $pdo->query("
                         <table class="data-table">
                             <thead><tr><th>Produto</th><th>Vendas</th><th>Total (R$)</th></tr></thead>
                             <tbody>
-                                <?php if ($plano_acesso_total && ($vendas_plano_raw['num_vendas'] ?? 0) > 0): ?>
+                                <?php
+                                // Combina vendas de plano e cursos para ordenação
+                                $vendas_combinadas = [];
+                                if ($plano_acesso_total && ($vendas_plano_raw['num_vendas'] ?? 0) > 0) {
+                                    $vendas_combinadas[] = [
+                                        'nome' => '<strong>' . htmlspecialchars($plano_acesso_total['nome']) . '</strong>',
+                                        'num_vendas' => (int)$vendas_plano_raw['num_vendas'],
+                                        'total_valor' => (float)$vendas_plano_raw['total_valor']
+                                    ];
+                                }
+                                foreach ($vendas_por_curso as $venda) {
+                                    $vendas_combinadas[] = [
+                                        'nome' => htmlspecialchars($venda['titulo']),
+                                        'num_vendas' => (int)$venda['num_vendas'],
+                                        'total_valor' => (float)$venda['total_valor']
+                                    ];
+                                }
+                                // Ordena pelo total_valor DESC
+                                usort($vendas_combinadas, fn($a, $b) => $b['total_valor'] <=> $a['total_valor']);
+                                ?>
+
+                                <?php foreach ($vendas_combinadas as $venda): ?>
                                     <tr>
-                                        <td><strong><?php echo htmlspecialchars($plano_acesso_total['nome']); ?></strong></td>
-                                        <td><?php echo $vendas_plano_raw['num_vendas']; ?></td>
-                                        <td>R$ <?php echo number_format((float)$vendas_plano_raw['total_valor'], 2, ',', '.'); ?></td>
-                                    </tr>
-                                <?php endif; ?>
-                                <?php foreach ($vendas_por_curso as $venda): ?>
-                                    <tr>
-                                        <td><?php echo htmlspecialchars($venda['titulo']); ?></td>
+                                        <td><?php echo $venda['nome']; ?></td>
                                         <td><?php echo $venda['num_vendas']; ?></td>
-                                        <td>R$ <?php echo number_format((float)$venda['total_valor'], 2, ',', '.'); ?></td>
+                                        <td>R$ <?php echo number_format($venda['total_valor'], 2, ',', '.'); ?></td>
                                     </tr>
                                 <?php endforeach; ?>
-                                <?php if (empty($vendas_por_curso) && ($vendas_plano_raw['num_vendas'] ?? 0) == 0): ?>
+
+                                <?php if (empty($vendas_combinadas)): ?>
                                     <tr><td colspan="3" style="text-align: center; color: var(--text-muted);">Nenhuma venda aprovada ainda.</td></tr>
+                                <?php endif; ?>
+                            </tbody>
+                        </table>
+                    </div>
+                </section>
+
+                <section class="management-card">
+                    <h2>Últimas 5 Transações Aprovadas</h2>
+                    <div class="table-wrapper">
+                        <table class="data-table">
+                            <thead><tr><th>ID</th><th>Usuário</th><th>Produto</th><th>Valor</th><th>Data</th></tr></thead>
+                            <tbody>
+                                <?php foreach ($recent_transactions_aprovadas as $tx): ?>
+                                <tr>
+                                    <td>#<?php echo $tx['id']; ?></td>
+                                    <td>
+                                        <?php echo htmlspecialchars($tx['usuario_nome']); ?>
+                                        <span class="user-email"><?php echo htmlspecialchars($tx['usuario_email'] ?? 'N/A'); ?></span>
+                                    </td>
+                                    <td><?php echo htmlspecialchars($tx['produto_nome']); ?></td>
+                                    <td>R$ <?php echo number_format((float)$tx['valor'], 2, ',', '.'); ?></td>
+                                    <td><?php echo date("d/m/Y H:i", strtotime($tx['created_at'])); ?></td>
+                                </tr>
+                                <?php endforeach; ?>
+                                <?php if (empty($recent_transactions_aprovadas)): ?>
+                                    <tr><td colspan="5" style="text-align: center; color: var(--text-muted);">Nenhuma transação aprovada encontrada.</td></tr>
                                 <?php endif; ?>
                             </tbody>
                         </table>
@@ -327,37 +504,15 @@ $recent_transactions_pendentes = $pdo->query("
                     </div>
                 </section>
 
-                <section class="management-card">
-                    <h2>Últimas 5 Transações Aprovadas</h2>
-                    <div class="table-wrapper">
-                        <table class="data-table">
-                            <thead><tr><th>ID</th><th>Usuário</th><th>Produto</th><th>Valor</th><th>Data</th></tr></thead>
-                            <tbody>
-                                <?php foreach ($recent_transactions_aprovadas as $tx): ?>
-                                <tr>
-                                    <td>#<?php echo $tx['id']; ?></td>
-                                    <td>
-                                        <?php echo htmlspecialchars($tx['usuario_nome']); ?>
-                                        <span class="user-email"><?php echo htmlspecialchars($tx['usuario_email'] ?? 'N/A'); ?></span>
-                                    </td>
-                                    <td><?php echo htmlspecialchars($tx['produto_nome']); ?></td>
-                                    <td>R$ <?php echo number_format((float)$tx['valor'], 2, ',', '.'); ?></td>
-                                    <td><?php echo date("d/m/Y H:i", strtotime($tx['created_at'])); ?></td>
-                                </tr>
-                                <?php endforeach; ?>
-                                <?php if (empty($recent_transactions_aprovadas)): ?>
-                                    <tr><td colspan="5" style="text-align: center; color: var(--text-muted);">Nenhuma transação aprovada encontrada.</td></tr>
-                                <?php endif; ?>
-                            </tbody>
-                        </table>
-                    </div>
-                </section>
             </div>
 
             <div class="right-column">
                 <section class="management-card">
                     <h2>Gerenciar Plano de Acesso Total</h2>
-                    <form method="POST" action="financascursos.php">
+                    <p style="color: var(--text-muted); font-size: 0.9rem; margin-top: -1rem; margin-bottom: 1.5rem;">
+                        Use o card "Planos Criados" para ver e editar todos os planos.
+                    </p>
+                    <form method="POST" action="financascursos.php" id="form-manage-plan">
                         <input type="hidden" name="action" value="manage_plan">
                         <input type="hidden" name="plano_id" value="<?php echo $plano_acesso_total['id'] ?? 0; ?>">
 
@@ -402,7 +557,62 @@ $recent_transactions_pendentes = $pdo->query("
                 </section>
             </div>
 
-        </div> </main>
+        </div>
+    </main>
+
+    <div id="planos-modal" class="modal">
+        <div class="modal-content">
+            <span class="modal-close" id="close-planos-modal">&times;</span>
+            <h2>Planos de Acesso Total Criados</h2>
+
+            <div class="table-wrapper">
+                <table class="data-table">
+                    <thead>
+                        <tr>
+                            <th>ID</th>
+                            <th>Nome</th>
+                            <th>Valor (R$)</th>
+                            <th>Ações</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <?php if (empty($todos_planos)): ?>
+                            <tr><td colspan="4" style="text-align: center; color: var(--text-muted);">Nenhum plano de acesso total foi criado ainda.</td></tr>
+                        <?php else: ?>
+                            <?php foreach ($todos_planos as $plano): ?>
+                                <tr>
+                                    <td>#<?php echo $plano['id']; ?></td>
+                                    <td>
+                                        <?php echo htmlspecialchars($plano['nome']); ?>
+                                        <span class="user-email"><?php echo htmlspecialchars(mb_strimwidth($plano['descricao'], 0, 50, "...")); ?></span>
+                                    </td>
+                                    <td>R$ <?php echo number_format((float)$plano['valor'], 2, ',', '.'); ?></td>
+                                    <td class="plan-actions">
+                                        <button type="button" class="btn-edit btn-edit-plano"
+                                            data-id="<?php echo $plano['id']; ?>"
+                                            data-nome="<?php echo htmlspecialchars($plano['nome']); ?>"
+                                            data-descricao="<?php echo htmlspecialchars($plano['descricao']); ?>"
+                                            data-valor="<?php echo number_format((float)$plano['valor'], 2, ',', '.'); ?>">
+                                            Editar
+                                        </button>
+
+                                        <form method="POST" action="financascursos.php" onsubmit="return confirm('Tem certeza que deseja deletar este plano? Esta ação não pode ser desfeita.');" style="margin: 0;">
+                                            <input type="hidden" name="action" value="delete_plan">
+                                            <input type="hidden" name="plano_id_del" value="<?php echo $plano['id']; ?>">
+                                            <button type="submit" class="btn-delete">Deletar</button>
+                                        </form>
+                                    </td>
+                                </tr>
+                            <?php endforeach; ?>
+                        <?php endif; ?>
+                    </tbody>
+                </table>
+            </div>
+
+            <button type="button" class="btn-new-plan" id="btn-criar-novo-plano">Criar Novo Plano</button>
+        </div>
+    </div>
+
 
     <script>
     document.addEventListener('DOMContentLoaded', () => {
@@ -453,20 +663,14 @@ $recent_transactions_pendentes = $pdo->query("
         }
 
         document.querySelectorAll('#plano-valor, .data-table input[name^="valores["]').forEach(input => {
-            // Formata ao carregar a página
-            if(input.value) { // Formata apenas se não estiver vazio
-                 formatarCampoBRL(input);
-            }
-
-            // Formata ao digitar
-            input.addEventListener('input', (e) => { // Trocado de 'keyup' para 'input' para melhor R$
+            if(input.value) { formatarCampoBRL(input); }
+            input.addEventListener('input', (e) => {
                 let originalPos = e.target.selectionStart;
                 let originalLength = e.target.value.length;
                 formatarCampoBRL(e.target);
                 let newLength = e.target.value.length;
                 e.target.setSelectionRange(originalPos + (newLength - originalLength), originalPos + (newLength - originalLength));
             });
-             // Formata ao colar
              input.addEventListener('paste', (e) => {
                 e.preventDefault();
                 let text = (e.clipboardData || window.clipboardData).getData('text');
@@ -474,6 +678,67 @@ $recent_transactions_pendentes = $pdo->query("
                 formatarCampoBRL(input);
             });
         });
+
+        // --- ⭐ NOVO: Lógica do Modal de Planos ---
+        const modal = document.getElementById('planos-modal');
+        const openBtn = document.getElementById('open-planos-modal');
+        const closeBtn = document.getElementById('close-planos-modal');
+        const formPlano = document.getElementById('form-manage-plan');
+
+        if (modal && openBtn && closeBtn && formPlano) {
+            // Abrir modal
+            openBtn.addEventListener('click', (e) => {
+                e.preventDefault();
+                modal.style.display = 'block';
+            });
+
+            // Fechar modal no 'X'
+            closeBtn.addEventListener('click', () => {
+                modal.style.display = 'none';
+            });
+
+            // Fechar clicando fora
+            window.addEventListener('click', (e) => {
+                if (e.target == modal) {
+                    modal.style.display = 'none';
+                }
+            });
+
+            // Botão "Criar Novo Plano"
+            document.getElementById('btn-criar-novo-plano').addEventListener('click', () => {
+                formPlano.querySelector('input[name="plano_id"]').value = '0';
+                formPlano.querySelector('input[name="nome"]').value = 'Novo Acesso Total';
+                formPlano.querySelector('textarea[name="descricao"]').value = 'Liberação de acesso a todos os cursos da plataforma.';
+                formPlano.querySelector('input[name="valor"]').value = '197,00'; // Valor padrão formatado
+                formPlano.querySelector('button[type="submit"]').textContent = 'Criar Plano';
+
+                modal.style.display = 'none'; // Fecha o modal
+                formPlano.querySelector('input[name="nome"]').focus(); // Foca no formulário
+                formPlano.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            });
+
+            // Botões "Editar" dentro do modal
+            document.querySelectorAll('.btn-edit-plano').forEach(button => {
+                button.addEventListener('click', (e) => {
+                    const id = e.target.getAttribute('data-id');
+                    const nome = e.target.getAttribute('data-nome');
+                    const descricao = e.target.getAttribute('data-descricao');
+                    const valor = e.target.getAttribute('data-valor');
+
+                    // Preenche o formulário principal na direita
+                    formPlano.querySelector('input[name="plano_id"]').value = id;
+                    formPlano.querySelector('input[name="nome"]').value = nome;
+                    formPlano.querySelector('textarea[name="descricao"]').value = descricao;
+                    formPlano.querySelector('input[name="valor"]').value = valor; // Já está formatado (ex: 197,00)
+                    formPlano.querySelector('button[type="submit"]').textContent = 'Salvar Alterações do Plano';
+
+                    // Fecha o modal e foca no formulário
+                    modal.style.display = 'none';
+                    formPlano.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                });
+            });
+        }
+
     });
     </script>
 </body>
