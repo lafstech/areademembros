@@ -1,0 +1,24 @@
+{
+    "name": "seu-nome/area-de-membros",
+    "description": "Plataforma de cursos online com área de membros.",
+    "type": "project",
+    "require": {
+        "php": ">=8.0",
+        "mailgun/mailgun-php": "^4.0",
+        "symfony/http-client": "^6.0 || ^7.0",
+        "nyholm/psr7": "^1.8"
+    },
+    "autoload": {
+        "files": [
+            "config.php"
+        ]
+    },
+    "scripts": {
+        "start": "heroku-php-apache2 ."
+    },
+    "config": {
+        "allow-plugins": {
+            "php-http/discovery": true
+        }
+    }
+}
