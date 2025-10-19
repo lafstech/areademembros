@@ -14,10 +14,93 @@ function handleAjaxRequest($pdo) {
 
         $action = $_GET['ajax_action'];
         $response = ['success' => false, 'message' => 'Ação inválida.'];
+        $admin_id = (int)$_SESSION['usuario_id']; // Pega o ID do admin da sessão
 
         try {
-            // ⭐ NOVO: AÇÃO PARA BUSCAR NOVAS MENSAGENS (POLLING)
-            if ($action === 'get_new_messages') {
+            // --- AÇÃO: Admin envia uma nova resposta (via POST AJAX) ---
+            if ($action === 'admin_reply' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+                $post_ticket_id = (int)($_POST['ticket_id'] ?? 0);
+                $mensagem = trim((string)($_POST['mensagem'] ?? ''));
+                $anexo_url = null; // URL do anexo a ser salva no DB
+
+                if ($post_ticket_id <= 0) {
+                    throw new Exception("ID do ticket inválido.");
+                }
+                if (empty($mensagem) && empty($_FILES['anexo']['name'])) {
+                    throw new Exception("A mensagem ou anexo não pode estar vazio.");
+                }
+
+                // --- Lógica de Upload de Anexo ---
+                if (isset($_FILES['anexo']) && $_FILES['anexo']['error'] === UPLOAD_ERR_OK) {
+                    $file = $_FILES['anexo'];
+                    $allowed_types = ['image/jpeg', 'image/png', 'image/gif'];
+                    $max_size = 5 * 1024 * 1024; // 5 MB
+
+                    if ($file['size'] > $max_size) {
+                        throw new Exception("Arquivo muito grande. Limite de 5MB.");
+                    }
+                    if (!in_array($file['type'], $allowed_types)) {
+                        throw new Exception("Formato de arquivo inválido. Apenas JPG, PNG e GIF são permitidos.");
+                    }
+
+                    // Define o diretório de upload
+                    $upload_dir_base = '../uploads/suporte/';
+                    if (!is_dir($upload_dir_base)) {
+                        if (!mkdir($upload_dir_base, 0755, true)) {
+                            throw new Exception("Falha ao criar diretório de uploads. Verifique as permissões.");
+                        }
+                    }
+
+                    // Gera nome único
+                    $filename = uniqid('ticket_' . $post_ticket_id . '_') . '_' . basename($file['name']);
+                    $upload_path = $upload_dir_base . $filename;
+
+                    if (move_uploaded_file($file['tmp_name'], $upload_path)) {
+                        // Salva o caminho *relativo* à raiz do site (não ao admin)
+                        $anexo_url = 'uploads/suporte/' . $filename;
+                    } else {
+                        throw new Exception("Falha ao mover o arquivo enviado.");
+                    }
+                }
+
+                $pdo->beginTransaction();
+
+                // 1. Insere a mensagem do admin
+                $stmt_msg = $pdo->prepare("
+                    INSERT INTO suporte_mensagens (ticket_id, remetente_id, mensagem, anexo_url)
+                    VALUES (?, ?, ?, ?)
+                ");
+                $stmt_msg->execute([$post_ticket_id, $admin_id, $mensagem, $anexo_url]);
+                $new_message_id = $pdo->lastInsertId();
+
+                // 2. Atualiza o status do ticket
+                $stmt_ticket = $pdo->prepare("
+                    UPDATE suporte_tickets
+                    SET status = 'AGUARDANDO_USUARIO', admin_ultima_visualizacao = NOW()
+                    WHERE id = ?
+                ");
+                $stmt_ticket->execute([$post_ticket_id]);
+
+                $pdo->commit();
+
+                // 3. Busca a mensagem recém-criada para retornar ao JS
+                $stmt_new = $pdo->prepare("
+                    SELECT m.*, u.nome AS remetente_nome, u.nivel_acesso AS remetente_nivel
+                    FROM suporte_mensagens m
+                    JOIN usuarios u ON m.remetente_id = u.id
+                    WHERE m.id = ?
+                ");
+                $stmt_new->execute([$new_message_id]);
+                $new_message_data = $stmt_new->fetch(PDO::FETCH_ASSOC);
+
+                $response = [
+                    'success' => true,
+                    'message' => $new_message_data
+                ];
+            }
+
+            // --- AÇÃO: Buscar Novas Mensagens (Polling) ---
+            elseif ($action === 'get_new_messages') {
                 $ticket_id = (int)($_GET['ticket_id'] ?? 0);
                 $last_message_id = (int)($_GET['last_message_id'] ?? 0);
 
@@ -25,7 +108,6 @@ function handleAjaxRequest($pdo) {
                     throw new Exception("ID do ticket inválido.");
                 }
 
-                // Busca mensagens MAIS NOVAS que a última ID, e que NÃO SEJAM do admin
                 $stmt_msg = $pdo->prepare("
                     SELECT m.*, u.nome AS remetente_nome, u.nivel_acesso AS remetente_nivel
                     FROM suporte_mensagens m
@@ -38,22 +120,28 @@ function handleAjaxRequest($pdo) {
                 $stmt_msg->execute([$ticket_id, $last_message_id]);
                 $new_messages = $stmt_msg->fetchAll(PDO::FETCH_ASSOC);
 
+                $status_changed = false;
                 if (count($new_messages) > 0) {
                     // Se buscamos novas mensagens, marcamos que o admin as viu
-                    $stmt_mark_read = $pdo->prepare("
-                        UPDATE suporte_tickets SET admin_ultima_visualizacao = NOW()
+                    // E mudamos o status do ticket para ABERTO (pois o usuário respondeu)
+                    $stmt_update = $pdo->prepare("
+                        UPDATE suporte_tickets
+                        SET admin_ultima_visualizacao = NOW(), status = 'ABERTO'
                         WHERE id = ?
                     ");
-                    $stmt_mark_read->execute([$ticket_id]);
+                    $stmt_update->execute([$ticket_id]);
+                    $status_changed = true; // ⭐ Indica que o status mudou
                 }
 
                 $response = [
                     'success' => true,
-                    'messages' => $new_messages
+                    'messages' => $new_messages,
+                    'status_changed' => $status_changed
                 ];
             }
 
         } catch (Exception $e) {
+            if ($pdo->inTransaction()) $pdo->rollBack();
             $response['message'] = $e->getMessage();
         }
 
@@ -78,12 +166,11 @@ $pagina_atual = basename($_SERVER['PHP_SELF']);
 $successMessage = null;
 $errorMessage = null;
 
-// Pega o ID do ticket pela URL. Se for 0, mostra a lista.
 $ticket_id_view = isset($_GET['ticket_id']) ? (int)$_GET['ticket_id'] : 0;
 
 
 // ===================================================================
-// === LÓGICA DE POST (Responder / Fechar Ticket) - (Sem alteração)
+// === LÓGICA DE POST (Apenas Fechar Ticket)
 // ===================================================================
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     try {
@@ -95,39 +182,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             throw new Exception("ID do ticket inválido.");
         }
 
-        // --- AÇÃO: Admin envia uma nova resposta ---
-        if ($action === 'admin_reply') {
-            $mensagem = trim((string)($_POST['mensagem'] ?? ''));
-            if (empty($mensagem)) {
-                throw new Exception("A mensagem não pode estar vazia.");
-            }
-
-            // 1. Insere a mensagem do admin
-            $stmt_msg = $pdo->prepare("
-                INSERT INTO suporte_mensagens (ticket_id, remetente_id, mensagem)
-                VALUES (?, ?, ?)
-            ");
-            $stmt_msg->execute([$post_ticket_id, $admin_id, $mensagem]);
-
-            // 2. Atualiza o status do ticket para "Aguardando Usuário"
-            // A data_ultima_atualizacao será atualizada automaticamente pelo TRIGGER do DB
-            $stmt_ticket = $pdo->prepare("
-                UPDATE suporte_tickets
-                SET status = 'AGUARDANDO_USUARIO', admin_ultima_visualizacao = NOW()
-                WHERE id = ?
-            ");
-            $stmt_ticket->execute([$post_ticket_id]);
-
-            $successMessage = "Resposta enviada com sucesso!";
-            // Define o $ticket_id_view para continuar na mesma página
-            $ticket_id_view = $post_ticket_id;
-
-        }
-
         // --- AÇÃO: Admin fecha o ticket ---
-        elseif ($action === 'close_ticket') {
+        if ($action === 'close_ticket') {
 
-            // 1. Atualiza o status do ticket
             $stmt_ticket = $pdo->prepare("
                 UPDATE suporte_tickets
                 SET status = 'FECHADO', data_fechamento = NOW(), fechado_por = 'admin'
@@ -135,7 +192,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             ");
             $stmt_ticket->execute([$post_ticket_id]);
 
-            // 2. (Opcional) Adiciona uma mensagem de sistema informando o fechamento
             $mensagem_sistema = "[TICKET FECHADO PELO SUPORTE]";
             $stmt_msg = $pdo->prepare("
                 INSERT INTO suporte_mensagens (ticket_id, remetente_id, mensagem)
@@ -145,13 +201,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
             $pdo->commit();
 
-            // Redireciona para a lista de tickets após fechar
             $_SESSION['flash_success'] = "Ticket #" . $post_ticket_id . " fechado com sucesso!";
             header("Location: suporte.php");
             exit;
         }
 
-        $pdo->commit();
+        // Se houver outras ações POST (não-ajax), elas iriam aqui
+        // $pdo->commit(); // Removido pois a única ação é 'close_ticket' que já faz commit/exit
 
     } catch (Exception $e) {
         if ($pdo->inTransaction()) $pdo->rollBack();
@@ -159,7 +215,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
 }
 
-// Mensagem de sucesso vinda de um redirecionamento (ex: fechar ticket)
 if (isset($_SESSION['flash_success'])) {
     $successMessage = $_SESSION['flash_success'];
     unset($_SESSION['flash_success']);
@@ -167,7 +222,7 @@ if (isset($_SESSION['flash_success'])) {
 
 
 // ===================================================================
-// === LÓGICA DE EXIBIÇÃO (GET)
+// === LÓGICA DE EXIBIÇÃO (GET) - (Sem alteração)
 // ===================================================================
 
 $view_data = [
@@ -177,14 +232,14 @@ $view_data = [
     'mensagens' => [],
     'usuario_ticket' => null,
     'filtro_status' => 'ABERTO',
-    'last_message_id' => 0 // ⭐ NOVO: Rastrear o ID da última mensagem
+    'last_message_id' => 0
 ];
 
 if ($ticket_id_view > 0) {
     // --- MODO DETALHE (CHAT VIEW) ---
     $view_data['modo_lista'] = false;
 
-    // 1. Marcar o ticket como lido pelo admin (atualiza a visualização)
+    // 1. Marcar o ticket como lido pelo admin
     $stmt_mark_read = $pdo->prepare("
         UPDATE suporte_tickets SET admin_ultima_visualizacao = NOW()
         WHERE id = ? AND (admin_ultima_visualizacao IS NULL OR admin_ultima_visualizacao < data_ultima_atualizacao)
@@ -198,17 +253,16 @@ if ($ticket_id_view > 0) {
     $view_data['ticket_info'] = $stmt_ticket->fetch(PDO::FETCH_ASSOC);
 
     if (!$view_data['ticket_info']) {
-        // Ticket não existe, redireciona para a lista
         $errorMessage = "Ticket não encontrado.";
-        $view_data['modo_lista'] = true; // Força o modo lista
+        $view_data['modo_lista'] = true;
 
     } else {
-        // 3. Buscar informações do usuário que abriu o ticket
+        // 3. Buscar informações do usuário
         $stmt_user = $pdo->prepare("SELECT id, nome, email FROM usuarios WHERE id = ?");
         $stmt_user->execute([$view_data['ticket_info']['usuario_id']]);
         $view_data['usuario_ticket'] = $stmt_user->fetch(PDO::FETCH_ASSOC);
 
-        // 4. Buscar todas as mensagens do ticket (JOIN com usuarios para saber quem enviou)
+        // 4. Buscar todas as mensagens
         $stmt_msgs = $pdo->prepare("
             SELECT m.*, u.nome AS remetente_nome, u.nivel_acesso AS remetente_nivel
             FROM suporte_mensagens m
@@ -219,7 +273,7 @@ if ($ticket_id_view > 0) {
         $stmt_msgs->execute([$ticket_id_view]);
         $view_data['mensagens'] = $stmt_msgs->fetchAll(PDO::FETCH_ASSOC);
 
-        // ⭐ NOVO: Armazena o ID da última mensagem para o polling
+        // 5. Armazena o ID da última mensagem para o polling
         if (!empty($view_data['mensagens'])) {
             $last_msg = end($view_data['mensagens']);
             $view_data['last_message_id'] = $last_msg['id'];
@@ -231,19 +285,14 @@ if ($ticket_id_view > 0) {
     $view_data['modo_lista'] = true;
     $view_data['filtro_status'] = $_GET['status'] ?? 'ABERTO';
 
-    // Define a cláusula WHERE com base no filtro
     $params = [];
     if ($view_data['filtro_status'] === 'FECHADO') {
         $sql_where = "WHERE t.status = 'FECHADO'";
     } else {
-        // 'ABERTO' inclui tickets esperando resposta do admin ('ABERTO')
-        // e tickets esperando resposta do usuário ('AGUARDANDO_USUARIO')
         $sql_where = "WHERE t.status IN ('ABERTO', 'AGUARDANDO_USUARIO')";
     }
 
-    // Busca a lista de tickets
-    // ⭐ MODIFICADO: (t.data_ultima_atualizacao > t.admin_ultima_visualizacao AND t.status = 'ABERTO') AS admin_nao_leu
-    // O admin só precisa ser notificado se o status for 'ABERTO' (aguardando ele)
+    // (t.data_ultima_atualizacao > t.admin_ultima_visualizacao AND t.status = 'ABERTO') AS admin_nao_leu
     $stmt_list = $pdo->prepare("
         SELECT
             t.id, t.assunto, t.status, t.data_ultima_atualizacao,
@@ -261,7 +310,6 @@ if ($ticket_id_view > 0) {
 // Função helper para formatar datas
 function formatarData($data) {
     if (!$data) return 'N/A';
-    // Adicionado 'H:i' para ver a hora
     return date("d/m/Y H:i", strtotime($data));
 }
 
@@ -287,7 +335,7 @@ function getStatusBadge($status) {
     <title>Suporte ao Cliente - Admin Panel</title>
     <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <style>
-        /* === CSS (Sem alteração) === */
+        /* === CSS (Base) === */
         :root {
             --primary-color: #e11d48; --background-color: #111827; --sidebar-color: #1f2937;
             --glass-background: rgba(31, 41, 55, 0.5); --text-color: #f9fafb; --text-muted: #9ca3af;
@@ -329,17 +377,29 @@ function getStatusBadge($status) {
         .form-group { margin-bottom: 1.5rem; }
         .form-group label { display: block; font-weight: 600; margin-bottom: 0.5rem; }
         .form-group input, .form-group textarea { width: 100%; padding: 0.75rem 1rem; background-color: var(--background-color); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-color); font-size: 1rem; font-family: 'Poppins', sans-serif; }
+        /* ⭐ NOVO: Estilo para input[type=file] */
+        .form-group input[type="file"] {
+            padding: 0.5rem;
+            background-color: var(--glass-background);
+        }
+        .form-group input[type="file"]::file-selector-button {
+            background-color: var(--primary-color);
+            color: white; border: none; padding: 0.5rem 1rem;
+            border-radius: 6px; cursor: pointer; margin-right: 1rem;
+            font-family: 'Poppins', sans-serif; font-weight: 500;
+        }
         .form-group textarea { resize: vertical; min-height: 120px; }
         .form-group input:focus, .form-group textarea:focus { border-color: var(--primary-color); outline: none; }
 
         .btn { padding: 0.8rem 1.5rem; background-color: var(--primary-color); color: white; border: none; border-radius: 8px; cursor: pointer; font-weight: 600; font-size: 1rem; transition: background-color 0.3s; text-decoration: none; }
-        .btn:hover { background-color: #c01a3f; }
+        .btn:hover:not(:disabled) { background-color: #c01a3f; }
+        .btn:disabled { background-color: #4b5563; opacity: 0.7; cursor: not-allowed; }
         .btn-success { background-color: var(--success-color); }
-        .btn-success:hover { background-color: #1a9c4b; }
+        .btn-success:hover:not(:disabled) { background-color: #1a9c4b; }
         .btn-info { background-color: var(--info-color); }
-        .btn-info:hover { background-color: #2563eb; }
+        .btn-info:hover:not(:disabled) { background-color: #2563eb; }
         .btn-secondary { background-color: #4b5563; }
-        .btn-secondary:hover { background-color: #374151; }
+        .btn-secondary:hover:not(:disabled) { background-color: #374151; }
 
         .table-wrapper { overflow-x: auto; }
         .data-table { width: 100%; border-collapse: collapse; }
@@ -404,8 +464,13 @@ function getStatusBadge($status) {
             padding: 1rem;
             border-radius: 12px;
             line-height: 1.6;
-            white-space: pre-wrap; /* Preserva quebras de linha */
-            word-wrap: break-word; /* Garante quebra de palavras longas */
+            white-space: pre-wrap;
+            word-wrap: break-word;
+
+            /* ⭐ CORREÇÃO: Largura e Alinhamento */
+            width: -moz-fit-content;
+            width: fit-content;
+            text-align: left; /* Garante alinhamento à esquerda */
         }
         .message-time { font-size: 0.75rem; color: var(--text-muted); margin-top: 0.25rem; }
 
@@ -419,7 +484,7 @@ function getStatusBadge($status) {
 
         .message-admin {
             align-self: flex-end;
-            align-items: flex-end; /* Alinha a data à direita */
+            align-items: flex-end;
         }
         .message-admin .message-bubble {
             background-color: var(--primary-color);
@@ -436,6 +501,17 @@ function getStatusBadge($status) {
             background-color: var(--glass-background);
             padding: 0.5rem 1rem;
             border-radius: 20px;
+        }
+
+        /* ⭐ NOVO: Estilo para Imagem no Chat */
+        .chat-image-anexo {
+            max-width: 100%;
+            width: 300px; /* Largura máxima para imagem não ficar gigante */
+            height: auto;
+            border-radius: 8px;
+            margin-top: 10px; /* Espaço entre texto e imagem */
+            cursor: pointer;
+            display: block; /* Garante que ocupe a linha */
         }
 
         .chat-reply-form {
@@ -562,7 +638,7 @@ function getStatusBadge($status) {
                                 Em: <?php echo formatarData($ticket['data_criacao']); ?>
                             </div>
                         </div>
-                        <div>
+                        <div id="ticket-status-badge">
                             <?php echo getStatusBadge($ticket['status']); ?>
                         </div>
                     </div>
@@ -577,11 +653,8 @@ function getStatusBadge($status) {
                                     $is_admin = ($msg['remetente_nivel'] === 'admin');
                                     $is_system = (strpos($msg['mensagem'], '[TICKET') === 0);
 
-                                    if ($is_system) {
-                                        $msg_class = 'message-system';
-                                    } else {
-                                        $msg_class = $is_admin ? 'message-admin' : 'message-user';
-                                    }
+                                    if ($is_system) $msg_class = 'message-system';
+                                    else $msg_class = $is_admin ? 'message-admin' : 'message-user';
                                 ?>
 
                                 <?php if ($is_system): ?>
@@ -595,25 +668,36 @@ function getStatusBadge($status) {
                                         </div>
                                         <div class="message-bubble">
                                             <?php echo nl2br(htmlspecialchars($msg['mensagem'])); ?>
+
+                                            <?php if (!empty($msg['anexo_url'])): ?>
+                                                <a href="../<?php echo htmlspecialchars($msg['anexo_url']); ?>" target="_blank">
+                                                    <img src="../<?php echo htmlspecialchars($msg['anexo_url']); ?>" alt="Anexo" class="chat-image-anexo">
+                                                </a>
+                                            <?php endif; ?>
                                         </div>
                                         <div class="message-time">
                                             <?php echo formatarData($msg['data_envio']); ?>
                                         </div>
                                     </div>
                                 <?php endif; ?>
-
                             <?php endforeach; ?>
                         </div>
 
                         <?php if ($ticket['status'] !== 'FECHADO'): ?>
                             <div class="chat-reply-form">
-                                <form method="POST" action="suporte.php?ticket_id=<?php echo $ticket['id']; ?>">
-                                    <input type="hidden" name="action" value="admin_reply">
+                                <form method="POST" action="suporte.php?ajax_action=admin_reply" id="chat-reply-form" enctype="multipart/form-data">
                                     <input type="hidden" name="ticket_id" value="<?php echo $ticket['id']; ?>">
+
                                     <div class="form-group">
                                         <label for="mensagem">Sua Resposta</label>
-                                        <textarea id="mensagem" name="mensagem" rows="5" required placeholder="Digite sua resposta aqui..."></textarea>
+                                        <textarea id="mensagem" name="mensagem" rows="4" placeholder="Digite sua resposta aqui..."></textarea>
                                     </div>
+
+                                    <div class="form-group" style="margin-bottom: 0.5rem;">
+                                        <label for="anexo">Anexar Imagem (Opcional - Max 5MB)</label>
+                                        <input type="file" name="anexo" id="anexo" accept="image/png, image/jpeg, image/gif">
+                                    </div>
+
                                     <button type="submit" class="btn btn-info">Enviar Resposta</button>
                                 </form>
                             </div>
@@ -629,7 +713,6 @@ function getStatusBadge($status) {
                         </form>
                     </div>
                     <?php endif; ?>
-
                 </section>
 
             <?php else: ?>
@@ -650,46 +733,33 @@ function getStatusBadge($status) {
         const body = document.body;
 
         if (menuToggle && sidebar) {
-            menuToggle.addEventListener('click', (event) => {
-                event.stopPropagation();
-                body.classList.toggle('sidebar-open');
-            });
-
+            menuToggle.addEventListener('click', (event) => { event.stopPropagation(); body.classList.toggle('sidebar-open'); });
             body.addEventListener('click', (event) => {
                 if (body.classList.contains('sidebar-open') && !sidebar.contains(event.target) && !menuToggle.contains(event.target)) {
                     body.classList.remove('sidebar-open');
                 }
             });
-
             sidebar.querySelectorAll('nav a').forEach(link => {
                 link.addEventListener('click', () => {
-                    if (body.classList.contains('sidebar-open')) {
-                        body.classList.remove('sidebar-open');
-                    }
+                    if (body.classList.contains('sidebar-open')) body.classList.remove('sidebar-open');
                 });
             });
         }
 
         const userProfileMenu = document.getElementById('user-profile-menu');
         const profileDropdown = document.getElementById('profile-dropdown');
-
         if(userProfileMenu && profileDropdown){
-            userProfileMenu.addEventListener('click', (event) => {
-                event.stopPropagation();
-                profileDropdown.classList.toggle('show');
-            });
-
+            userProfileMenu.addEventListener('click', (event) => { event.stopPropagation(); profileDropdown.classList.toggle('show'); });
             window.addEventListener('click', () => {
-                if (profileDropdown.classList.contains('show')) {
-                    profileDropdown.classList.remove('show');
-                }
+                if (profileDropdown.classList.contains('show')) profileDropdown.classList.remove('show');
             });
         }
 
         // --- Lógica Específica (suporte.php) ---
         const chatHistory = document.getElementById('chat-history');
+        const statusBadge = document.getElementById('ticket-status-badge');
 
-        // Helper para formatar data em JS (similar ao do PHP)
+        // --- Helpers JS ---
         const formatDate_JS = (dateStr) => {
             if (!dateStr) return 'N/A';
             return new Date(dateStr).toLocaleString('pt-BR', {
@@ -698,42 +768,108 @@ function getStatusBadge($status) {
             });
         };
 
-        // ⭐ NOVO: LÓGICA DE POLLING (BUSCA DE MENSAGENS)
+        // ⭐ NOVO: Helper para gerar HTML do badge
+        const getBadgeHTML = (status) => {
+            if (status === 'ABERTO') {
+                return '<span class="badge badge-warning">Aguardando Suporte</span>';
+            } else if (status === 'AGUARDANDO_USUARIO') {
+                return '<span class="badge badge-info">Aguardando Usuário</span>';
+            } else {
+                return '<span class="badge badge-muted">Fechado</span>';
+            }
+        };
+
+        // ⭐ NOVO: Helper para sanitizar HTML (evitar XSS)
+        const sanitizeHTML = (str) => {
+            return str.replace(/</g, "&lt;").replace(/>/g, "&gt;");
+        };
+
+        // ⭐ NOVO: Helper para adicionar mensagens do *USUÁRIO* (do polling)
+        const appendUserMessageToChat = (msg) => {
+            const msgDiv = document.createElement('div');
+            msgDiv.className = 'message-user chat-message';
+
+            const senderDiv = document.createElement('div');
+            senderDiv.className = 'message-sender';
+            senderDiv.textContent = sanitizeHTML(msg.remetente_nome || 'Usuário');
+
+            const bubbleDiv = document.createElement('div');
+            bubbleDiv.className = 'message-bubble';
+            // Sanitiza e formata quebras de linha
+            bubbleDiv.innerHTML = msg.mensagem ? sanitizeHTML(msg.mensagem).replace(/\n/g, '<br>') : '';
+
+            if (msg.anexo_url) {
+                const link = document.createElement('a');
+                link.href = '../' + sanitizeHTML(msg.anexo_url);
+                link.target = '_blank';
+
+                const img = document.createElement('img');
+                img.src = '../' + sanitizeHTML(msg.anexo_url);
+                img.alt = 'Anexo';
+                img.className = 'chat-image-anexo';
+
+                link.appendChild(img);
+                bubbleDiv.appendChild(link);
+            }
+
+            const timeDiv = document.createElement('div');
+            timeDiv.className = 'message-time';
+            timeDiv.textContent = formatDate_JS(msg.data_envio);
+
+            msgDiv.appendChild(senderDiv);
+            msgDiv.appendChild(bubbleDiv);
+            msgDiv.appendChild(timeDiv);
+
+            chatHistory.appendChild(msgDiv);
+        };
+
+        // ⭐ NOVO: Helper para adicionar mensagens do *ADMIN* (do form AJAX)
+        const appendAdminMessageToChat = (msg) => {
+            const msgDiv = document.createElement('div');
+            msgDiv.className = 'message-admin chat-message';
+
+            const senderDiv = document.createElement('div');
+            senderDiv.className = 'message-sender';
+            senderDiv.textContent = sanitizeHTML(msg.remetente_nome || 'Admin') + ' (Suporte)';
+
+            const bubbleDiv = document.createElement('div');
+            bubbleDiv.className = 'message-bubble';
+            bubbleDiv.innerHTML = msg.mensagem ? sanitizeHTML(msg.mensagem).replace(/\n/g, '<br>') : '';
+
+            if (msg.anexo_url) {
+                const link = document.createElement('a');
+                link.href = '../' + sanitizeHTML(msg.anexo_url);
+                link.target = '_blank';
+
+                const img = document.createElement('img');
+                img.src = '../' + sanitizeHTML(msg.anexo_url);
+                img.alt = 'Anexo';
+                img.className = 'chat-image-anexo';
+
+                link.appendChild(img);
+                bubbleDiv.appendChild(link);
+            }
+
+            const timeDiv = document.createElement('div');
+            timeDiv.className = 'message-time';
+            timeDiv.textContent = formatDate_JS(msg.data_envio);
+
+            msgDiv.appendChild(senderDiv);
+            msgDiv.appendChild(bubbleDiv);
+            msgDiv.appendChild(timeDiv);
+
+            chatHistory.appendChild(msgDiv);
+        };
+
+        // --- Lógica de Polling e Envio de Formulário ---
         if (chatHistory) {
-            // 1. Scrollar o chat para a última mensagem no carregamento da página
+            // 1. Scrollar o chat para a última mensagem no carregamento
             chatHistory.scrollTop = chatHistory.scrollHeight;
 
-            // 2. Pegar dados do chat
             const ticketId = chatHistory.dataset.ticketId;
             let lastMessageId = parseInt(chatHistory.dataset.lastMessageId || '0');
 
-            // 3. Helper para adicionar novas mensagens ao DOM (de forma segura)
-            const appendMessageToChat = (msg) => {
-                // Esta função só é chamada para mensagens de usuário vindas do polling
-                const msgDiv = document.createElement('div');
-                msgDiv.className = 'message-user';
-
-                const senderDiv = document.createElement('div');
-                senderDiv.className = 'message-sender';
-                senderDiv.textContent = msg.remetente_nome || 'Usuário'; // Protege contra XSS
-
-                const bubbleDiv = document.createElement('div');
-                bubbleDiv.className = 'message-bubble';
-                // Protege contra XSS e replica o nl2br
-                bubbleDiv.innerHTML = msg.mensagem.replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/\n/g, '<br>');
-
-                const timeDiv = document.createElement('div');
-                timeDiv.className = 'message-time';
-                timeDiv.textContent = formatDate_JS(msg.data_envio); // Protege contra XSS
-
-                msgDiv.appendChild(senderDiv);
-                msgDiv.appendChild(bubbleDiv);
-                msgDiv.appendChild(timeDiv);
-
-                chatHistory.appendChild(msgDiv);
-            };
-
-            // 4. Função de Polling (a cada 3 segundos)
+            // 2. Função de Polling (a cada 3 segundos)
             const checkNewMessages = async () => {
                 try {
                     const params = new URLSearchParams({
@@ -748,39 +884,80 @@ function getStatusBadge($status) {
                     if (data.success && data.messages.length > 0) {
                         let newLastId = lastMessageId;
                         data.messages.forEach(msg => {
-                            appendMessageToChat(msg);
-                            newLastId = msg.id; // Atualiza o ID da última mensagem
+                            appendUserMessageToChat(msg);
+                            newLastId = msg.id;
                         });
 
-                        lastMessageId = newLastId; // Atualiza o estado JS
-                        chatHistory.dataset.lastMessageId = newLastId; // Atualiza o estado DOM
+                        lastMessageId = newLastId;
+                        chatHistory.dataset.lastMessageId = lastMessageId;
 
-                        // Rola para baixo apenas se o usuário não estiver lendo o histórico
-                        // (a 100px do fundo)
-                        if (chatHistory.scrollHeight - chatHistory.scrollTop - chatHistory.clientHeight < 100) {
+                        if (chatHistory.scrollHeight - chatHistory.scrollTop - chatHistory.clientHeight < 150) {
                              chatHistory.scrollTop = chatHistory.scrollHeight;
                         }
-
-                        // Atualiza o status na lista (se o usuário responder)
-                        // Isso é para o caso de o admin estar na lista e o usuário responder
-                        // (Melhoria futura, não implementada aqui para simplicidade)
                     }
+
+                    // ⭐ NOVO: Atualiza o status se o backend informar que mudou
+                    if (data.success && data.status_changed && statusBadge) {
+                         statusBadge.innerHTML = getBadgeHTML('ABERTO');
+                    }
+
                 } catch (error) {
                     console.error('Erro ao buscar novas mensagens:', error);
-                    // Para de fazer polling se houver um erro para não sobrecarregar
-                    if (pollingInterval) {
-                        clearInterval(pollingInterval);
-                    }
+                    if (pollingInterval) clearInterval(pollingInterval);
                 }
             };
 
-            // 5. Inicia o Polling
-            // Só faz polling se o ticket não estiver fechado
+            // 3. Inicia o Polling
             <?php if ($view_data['ticket_info'] && $view_data['ticket_info']['status'] !== 'FECHADO'): ?>
-                const pollingInterval = setInterval(checkNewMessages, 3000); // 3000ms = 3 segundos
+                const pollingInterval = setInterval(checkNewMessages, 3000);
             <?php endif; ?>
-        }
 
+            // 4. ⭐ NOVO: Intercepta o envio do formulário de resposta
+            const replyForm = document.getElementById('chat-reply-form');
+            if (replyForm) {
+                replyForm.addEventListener('submit', async function(e) {
+                    e.preventDefault();
+
+                    const formData = new FormData(replyForm);
+                    const submitButton = replyForm.querySelector('button[type="submit"]');
+                    submitButton.disabled = true;
+                    submitButton.textContent = 'Enviando...';
+
+                    try {
+                        const response = await fetch('suporte.php?ajax_action=admin_reply', {
+                            method: 'POST',
+                            body: formData
+                        });
+
+                        const data = await response.json();
+
+                        if (data.success && data.message) {
+                            appendAdminMessageToChat(data.message);
+
+                            lastMessageId = data.message.id;
+                            chatHistory.dataset.lastMessageId = lastMessageId;
+
+                            chatHistory.scrollTop = chatHistory.scrollHeight;
+                            replyForm.reset(); // Limpa o texto e o arquivo
+
+                            if (statusBadge) {
+                                statusBadge.innerHTML = getBadgeHTML('AGUARDANDO_USUARIO');
+                            }
+
+                        } else {
+                            alert('Erro ao enviar resposta: ' + (data.message || 'Erro desconhecido.'));
+                        }
+
+                    } catch (error) {
+                        console.error('Erro no fetch:', error);
+                        alert('Erro de conexão ao enviar resposta.');
+                    } finally {
+                        submitButton.disabled = false;
+                        submitButton.textContent = 'Enviar Resposta';
+                    }
+                });
+            }
+        }
     });
     </script>
 </body>
