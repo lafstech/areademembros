@@ -1,23 +1,28 @@
 <?php
-// Requer o config.php para obter a conexão $pdo, que já é inteligente
-// o suficiente para se conectar ao Heroku ou localmente.
-require_once 'config.php';
+// migrations.php - Script de Migração do PostgreSQL (Função Plug-and-Play)
 
-// --- INÍCIO DO SCRIPT DE MIGRAÇÃO ---
-
-// Usamos uma função para encapsular a lógica e torná-la mais limpa.
 function run_migrations($pdo) {
     try {
-        echo "Iniciando verificação/criação das tabelas...\n";
+        // Usamos um sinalizador para evitar que esta migração seja chamada
+        // em CADA requisição após a primeira vez.
 
-        // Inicia a transação para garantir que todas as queries sejam executadas ou nenhuma.
+        // Tente verificar se uma tabela crucial (como 'usuarios') existe
+        // e, se existir, pule o processo para otimizar o desempenho.
+        $check_table = $pdo->query("SELECT 1 FROM pg_tables WHERE tablename = 'usuarios'");
+        if ($check_table && $check_table->fetchColumn()) {
+            // Se a tabela 'usuarios' já existe, assumimos que as migrações foram aplicadas.
+            return;
+        }
+
+        // Se chegamos aqui, a tabela 'usuarios' não existe, então criamos TUDO.
+
+        echo "Iniciando Migração Automática: Criando todas as tabelas PostgreSQL...\n";
+
         $pdo->beginTransaction();
 
         // ---------------------------------------------------------------------
-        // 1. CRIAÇÃO DE FUNÇÕES E TRIGGERS (Específico do PostgreSQL)
+        // 1. CRIAÇÃO DE FUNÇÕES E TRIGGERS
         // ---------------------------------------------------------------------
-
-        echo "Criando Funções e Triggers de Suporte...\n";
 
         // FUNÇÃO: Atualiza data_ultima_atualizacao na tabela suporte_tickets
         $pdo->exec("
@@ -38,9 +43,8 @@ function run_migrations($pdo) {
         // 2. CRIAÇÃO DAS TABELAS
         // ---------------------------------------------------------------------
 
-        // Array com todas as queries de criação de tabela
         $queries = [
-            // TABELA 1: USUARIOS (Adicionadas colunas 'status' e redefinição de senha)
+            // TABELA 1: USUARIOS
             "CREATE TABLE IF NOT EXISTS usuarios (
                 id SERIAL PRIMARY KEY,
                 nome VARCHAR(255) NOT NULL,
@@ -49,7 +53,7 @@ function run_migrations($pdo) {
                 nivel_acesso VARCHAR(50) NOT NULL DEFAULT 'membro',
                 data_criacao TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
                 status VARCHAR(50) NOT NULL DEFAULT 'ativo',
-                reset_token VARCHAR(64) UNIQUE DEFAULT NULL,
+                reset_token VARCHAR(64) UNIQUE,
                 reset_expira_em TIMESTAMP WITHOUT TIME ZONE
             );",
 
@@ -71,7 +75,7 @@ function run_migrations($pdo) {
                 valor NUMERIC(5,2)
             );",
 
-            // TABELA 4: PLANOS (NOVO - Baseado no dump)
+            // TABELA 4: PLANOS
             "CREATE TABLE IF NOT EXISTS planos (
                 id SERIAL PRIMARY KEY,
                 nome VARCHAR(255) NOT NULL,
@@ -80,15 +84,15 @@ function run_migrations($pdo) {
                 tipo_acesso VARCHAR(50) NOT NULL
             );",
 
-            // TABELA 5: GATEWAYS_PAGAMENTO (NOVO - Baseado no dump)
+            // TABELA 5: GATEWAYS_PAGAMENTO
             "CREATE TABLE IF NOT EXISTS gateways_pagamento (
                 id SERIAL PRIMARY KEY,
-                nome VARCHAR(100) NOT NULL,
+                nome VARCHAR(100) NOT NULL UNIQUE,
                 ativo BOOLEAN DEFAULT TRUE,
                 created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
             );",
 
-            // TABELA 6: PEDIDOS (NOVO - Baseado no dump)
+            // TABELA 6: PEDIDOS
             "CREATE TABLE IF NOT EXISTS pedidos (
                 id SERIAL PRIMARY KEY,
                 usuario_id INTEGER NOT NULL REFERENCES usuarios(id),
@@ -121,14 +125,14 @@ function run_migrations($pdo) {
                 caminho_arquivo VARCHAR(255) NOT NULL
             );",
 
-            // TABELA 9: USUARIO_CURSOS (Tabela Pivô)
+            // TABELA 9: USUARIO_CURSOS (Pivô)
             "CREATE TABLE IF NOT EXISTS usuario_cursos (
                 usuario_id INTEGER NOT NULL REFERENCES usuarios(id) ON DELETE CASCADE,
                 curso_id INTEGER NOT NULL REFERENCES cursos(id) ON DELETE CASCADE,
                 PRIMARY KEY (usuario_id, curso_id)
             );",
 
-            // TABELA 10: AULA_ARQUIVOS (Tabela Pivô)
+            // TABELA 10: AULA_ARQUIVOS (Pivô)
             "CREATE TABLE IF NOT EXISTS aula_arquivos (
                 aula_id INTEGER NOT NULL REFERENCES aulas(id) ON DELETE CASCADE,
                 arquivo_id INTEGER NOT NULL REFERENCES arquivos(id) ON DELETE CASCADE,
@@ -172,7 +176,7 @@ function run_migrations($pdo) {
                 data_comentario TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
             );",
 
-            // TABELA 15: SUPORTE_TICKETS (NOVO - Baseado no dump)
+            // TABELA 15: SUPORTE_TICKETS
             "CREATE TABLE IF NOT EXISTS suporte_tickets (
                 id SERIAL PRIMARY KEY,
                 usuario_id INTEGER NOT NULL REFERENCES usuarios(id),
@@ -188,7 +192,7 @@ function run_migrations($pdo) {
                 avaliacao INTEGER
             );",
 
-            // TABELA 16: SUPORTE_MENSAGENS (NOVO - Baseado no dump)
+            // TABELA 16: SUPORTE_MENSAGENS
             "CREATE TABLE IF NOT EXISTS suporte_mensagens (
                 id SERIAL PRIMARY KEY,
                 ticket_id INTEGER NOT NULL REFERENCES suporte_tickets(id) ON DELETE CASCADE,
@@ -199,19 +203,14 @@ function run_migrations($pdo) {
             );"
         ];
 
-
-        // Executa cada query de criação de tabela
+        // Executa as queries de criação de tabela
         foreach ($queries as $query) {
             $pdo->exec($query);
         }
 
-        echo "Estrutura de tabelas verificada com sucesso.\n";
-
         // ---------------------------------------------------------------------
         // 3. CRIAÇÃO DE TRIGGERS E ÍNDICES (PÓS-CRIAÇÃO DE TABELAS)
         // ---------------------------------------------------------------------
-
-        echo "Aplicando Triggers e Índices...\n";
 
         // TRIGGER (Após criar a tabela suporte_mensagens)
         $pdo->exec("
@@ -221,17 +220,15 @@ function run_migrations($pdo) {
             EXECUTE FUNCTION public.atualizar_ultima_atualizacao_ticket();
         ");
 
-        // ÍNDICES
+        // ÍNDICES (Opcional, mas bom para performance)
         $pdo->exec("CREATE INDEX IF NOT EXISTS idx_suporte_tickets_usuario_id ON public.suporte_tickets USING btree (usuario_id);");
         $pdo->exec("CREATE INDEX IF NOT EXISTS idx_suporte_mensagens_ticket_id ON public.suporte_mensagens USING btree (ticket_id);");
+
 
         // ---------------------------------------------------------------------
         // 4. INSERIR DADOS INICIAIS (SEEDING)
         // ---------------------------------------------------------------------
 
-        echo "Verificando usuários padrão e dados iniciais...\n";
-
-        // Senha para ambos será "123456"
         $senhaHash = password_hash('123456', PASSWORD_DEFAULT);
 
         // Insere o usuário admin SE NÃO EXISTIR
@@ -240,9 +237,6 @@ function run_migrations($pdo) {
         if ($stmt->rowCount() == 0) {
             $stmtInsert = $pdo->prepare("INSERT INTO usuarios (nome, email, senha, nivel_acesso) VALUES (?, ?, ?, ?);");
             $stmtInsert->execute(['Administrador', 'admin@email.com', $senhaHash, 'admin']);
-            echo "Usuário 'admin' criado.\n";
-        } else {
-            echo "Usuário 'admin' já existe.\n";
         }
 
         // Insere o usuário membro SE NÃO EXISTIR
@@ -250,9 +244,6 @@ function run_migrations($pdo) {
         if ($stmt->rowCount() == 0) {
             $stmtInsert = $pdo->prepare("INSERT INTO usuarios (nome, email, senha, nivel_acesso) VALUES (?, ?, ?, ?);");
             $stmtInsert->execute(['Membro Teste', 'membro@email.com', $senhaHash, 'membro']);
-            echo "Usuário 'membro' de teste criado.\n";
-        } else {
-            echo "Usuário 'membro' de teste já existe.\n";
         }
 
         // Insere Gateway Padrão (Ex: PIX) SE NÃO EXISTIR
@@ -261,21 +252,18 @@ function run_migrations($pdo) {
         if ($stmt->rowCount() == 0) {
              $stmtInsert = $pdo->prepare("INSERT INTO gateways_pagamento (nome, ativo) VALUES ('PIX', TRUE);");
              $stmtInsert->execute();
-             echo "Gateway 'PIX' adicionado.\n";
         }
 
 
         $pdo->commit();
-        echo "\nConfiguração do banco de dados concluída com sucesso! 🚀\n";
+        echo "Migração do banco de dados concluída com sucesso! (Autostart)\n";
 
     } catch (PDOException $e) {
-        // Se algo der errado, desfaz tudo e exibe o erro.
         if ($pdo->inTransaction()) {
              $pdo->rollBack();
         }
-        die("ERRO AO CONFIGURAR O BANCO DE DADOS: " . $e->getMessage());
+        // Em um ambiente de produção, apenas registre o erro, não use 'die()'
+        error_log("ERRO FATAL NA MIGRAÇÃO: " . $e->getMessage());
+        // Se este script rodar no config.php, não podemos dar 'die' na produção.
     }
 }
-
-// Executa a função de migração passando a conexão PDO do config.php
-run_migrations($pdo);

@@ -37,6 +37,9 @@ if (session_status() === PHP_SESSION_NONE) {
 // Verifica se a variável de ambiente do Heroku/Render (DATABASE_URL) existe
 $database_url = getenv('DATABASE_URL');
 
+// Variável para controle de ambiente
+$is_production = $database_url !== false;
+
 if ($database_url) {
     // --- AMBIENTE DE PRODUÇÃO (HEROKU/RENDER) ---
     $db_parts = parse_url($database_url);
@@ -66,8 +69,25 @@ try {
         PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
         PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
     ]);
+
+    // ⭐ NOVO: CHAMADA AUTOMÁTICA DA MIGRAÇÃO
+    // Inclui e executa as migrações/seeding se necessário.
+    // Usamos require_once para que o script de migração seja definido apenas uma vez.
+    if (file_exists('migrations.php')) {
+        require_once 'migrations.php';
+        // A função run_migrations() deve ser definida em migrations.php
+        run_migrations($pdo);
+    }
+
+
 } catch (PDOException $e) {
-    die("Erro fatal: Não foi possível conectar ao banco de dados. Detalhe: " . $e->getMessage());
+    // Em caso de erro de conexão, exibe detalhes apenas no ambiente local
+    if (!$is_production) {
+        die("Erro fatal: Não foi possível conectar ao banco de dados. Detalhe: " . $e->getMessage());
+    }
+    // Em produção, registra o erro e exibe uma mensagem genérica
+    error_log("DB Connection Failed: " . $e->getMessage());
+    die("Erro fatal: Serviço de banco de dados indisponível.");
 }
 
 
