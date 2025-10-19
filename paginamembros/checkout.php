@@ -1,6 +1,7 @@
 <?php
 // checkout.php - Versão Final com Layout Refinado e Animações Corrigida
 
+// Carrega config.php, que agora carrega load_settings.php e as constantes.
 require_once '../config.php';
 verificarAcesso('membro');
 
@@ -8,13 +9,20 @@ $usuario_id = (int)$_SESSION['usuario_id'];
 $nome_usuario = htmlspecialchars($_SESSION['usuario_nome']);
 $pagina_atual = basename($_SERVER['PHP_SELF']);
 
-// --- LÓGICA DA PIXUP (Inalterada) ---
-$PIXUP_CLIENT_ID = 'notfakeluccas_2735058915962624';
-$PIXUP_CLIENT_SECRET = '3e56523361cb1b25b2074302ed1e93e5111f62c948111250deacf67877838062';
+// Usamos as constantes definidas em load_settings.php
+$PIXUP_CLIENT_ID = defined('PIXUP_CLIENT_ID') ? PIXUP_CLIENT_ID : null;
+$PIXUP_CLIENT_SECRET = defined('PIXUP_CLIENT_SECRET') ? PIXUP_CLIENT_SECRET : null;
+
+// Se as chaves não existirem (falha na migração/leitura do DB), lançamos um erro.
+if (!$PIXUP_CLIENT_ID || !$PIXUP_CLIENT_SECRET) {
+    // Não use 'die' aqui. A lógica do try-catch abaixo deve capturar isso.
+    error_log("ERRO: Chaves PIXUP não carregadas do banco de dados.");
+}
 
 function getPixUpToken(string $clientId, string $clientSecret): string {
     if (isset($_SESSION['pixup_token']) && time() < $_SESSION['pixup_token_expires']) { return $_SESSION['pixup_token']; }
     $url = 'https://api.pixupbr.com/v2/oauth/token';
+    // O clientId e clientSecret vêm agora do escopo superior (carregados do DB)
     $ch = curl_init($url);
     curl_setopt_array($ch, [CURLOPT_RETURNTRANSFER => true, CURLOPT_POST => true, CURLOPT_HTTPHEADER => ['Authorization: Basic ' . base64_encode($clientId . ':' . $clientSecret)]]);
     $response = curl_exec($ch); $http_code = curl_getinfo($ch, CURLINFO_HTTP_CODE); curl_close($ch);
@@ -33,12 +41,19 @@ $tipo_produto_comprado = null;
 // === LÓGICA DE GERAÇÃO DE PIX (POST) ===
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     try {
+        // Validação inicial das chaves carregadas
+        if (!$PIXUP_CLIENT_ID || !$PIXUP_CLIENT_SECRET) {
+            throw new Exception("Configurações do Gateway PixUp estão ausentes no sistema. Contate o administrador.");
+        }
+
         $productId = (int)($_POST['product_id'] ?? 0);
         $productType = (string)($_POST['product_type'] ?? '');
         $cpf = preg_replace('/[^0-9]/', '', (string)($_POST['cpf'] ?? ''));
         if (strlen($cpf) !== 11) { throw new Exception('CPF inválido. Por favor, insira um CPF com 11 dígitos.'); }
         if ($productId <= 0 || !in_array($productType, ['curso', 'plano'])) { throw new Exception('Produto inválido.'); }
+
         $pdo->beginTransaction();
+
         $produto = null;
         if ($productType === 'curso') {
             $stmt = $pdo->prepare("SELECT id, titulo AS nome, valor FROM cursos WHERE id = ?");
@@ -49,29 +64,47 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $stmt->execute([$productId]);
             $produto = $stmt->fetch(PDO::FETCH_ASSOC);
         }
+
         $stmtUser = $pdo->prepare("SELECT nome, email FROM usuarios WHERE id = ?");
         $stmtUser->execute([$usuario_id]);
         $user = $stmtUser->fetch(PDO::FETCH_ASSOC);
+
         if (!$produto || !$user) throw new Exception('Usuário ou produto não encontrado.');
-        $sql = "INSERT INTO pedidos (usuario_id, curso_id, plano_id, gateway_id, valor, status) VALUES (?, ?, ?, (SELECT id FROM gateways_pagamento WHERE nome='PixUp'), ?, 'PENDENTE') RETURNING id";
+
+        // Inserção no Pedido
+        $sql = "INSERT INTO pedidos (usuario_id, curso_id, plano_id, gateway_id, valor, status) VALUES (?, ?, ?, (SELECT id FROM gateways_pagamento WHERE nome='PIX'), ?, 'PENDENTE') RETURNING id";
         $stmtPedido = $pdo->prepare($sql);
         $stmtPedido->execute([$usuario_id, $productType === 'curso' ? $produto['id'] : null, $productType === 'plano' ? $produto['id'] : null, $produto['valor']]);
         $pedidoId = $stmtPedido->fetchColumn();
+
         if (!$pedidoId) throw new Exception('Falha ao registrar o pedido local.');
+
+        // Geração do Token PixUp (usando as variáveis carregadas do DB)
         $pixupToken = getPixUpToken($PIXUP_CLIENT_ID, $PIXUP_CLIENT_SECRET);
+
         $payload = json_encode(['amount' => (float)$produto['valor'], 'external_id' => (string)$pedidoId, 'postbackUrl' => "https://sitedemembros-1.onrender.com/paginamembros/api/webhook_pixup_cursos.php", 'payerQuestion' => "Compra de " . $produto['nome'], 'payer' => ['name' => $user['nome'], 'document' => $cpf, 'email' => $user['email']]]);
+
         $ch = curl_init('https://api.pixupbr.com/v2/pix/qrcode');
         curl_setopt_array($ch, [CURLOPT_RETURNTRANSFER => true, CURLOPT_POST => true, CURLOPT_POSTFIELDS => $payload, CURLOPT_HTTPHEADER => ["Authorization: Bearer {$pixupToken}", "Content-Type: application/json"]]);
-        $response = curl_exec($ch); $http_code = curl_getinfo($ch, CURLINFO_HTTP_CODE); curl_close($ch);
+
+        $response = curl_exec($ch);
+        $http_code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        curl_close($ch);
+
         if ($http_code !== 200) { throw new Exception("Gateway de pagamento indisponível. Resposta: " . $response); }
+
         $responseData = json_decode($response, true);
         if (!isset($responseData['qrcode'])) { throw new Exception("Resposta inesperada do gateway."); }
+
         $stmtUpdate = $pdo->prepare("UPDATE pedidos SET pix_code = ? WHERE id = ?");
         $stmtUpdate->execute([$responseData['qrcode'], $pedidoId]);
+
         $pdo->commit();
+
         $pixData = ['pedidoId' => $pedidoId, 'pix_copy_paste_code' => $responseData['qrcode']];
         $id_produto_comprado = $produto['id'];
         $tipo_produto_comprado = $productType;
+
     } catch (Exception $e) {
         if ($pdo->inTransaction()) $pdo->rollBack();
         $errorMessage = $e->getMessage();

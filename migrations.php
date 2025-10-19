@@ -3,18 +3,12 @@
 
 function run_migrations($pdo) {
     try {
-        // Usamos um sinalizador para evitar que esta migração seja chamada
-        // em CADA requisição após a primeira vez.
-
         // Tente verificar se uma tabela crucial (como 'usuarios') existe
         // e, se existir, pule o processo para otimizar o desempenho.
         $check_table = $pdo->query("SELECT 1 FROM pg_tables WHERE tablename = 'usuarios'");
         if ($check_table && $check_table->fetchColumn()) {
-            // Se a tabela 'usuarios' já existe, assumimos que as migrações foram aplicadas.
             return;
         }
-
-        // Se chegamos aqui, a tabela 'usuarios' não existe, então criamos TUDO.
 
         echo "Iniciando Migração Automática: Criando todas as tabelas PostgreSQL...\n";
 
@@ -40,10 +34,18 @@ function run_migrations($pdo) {
         ");
 
         // ---------------------------------------------------------------------
-        // 2. CRIAÇÃO DAS TABELAS
+        // 2. CRIAÇÃO DAS TABELAS (NOVA TABELA CONFIGURACOES INCLUÍDA)
         // ---------------------------------------------------------------------
 
         $queries = [
+            // ⭐ NOVO: TABELA CONFIGURACOES
+            "CREATE TABLE IF NOT EXISTS configuracoes (
+                id SERIAL PRIMARY KEY,
+                chave VARCHAR(100) NOT NULL UNIQUE,
+                valor TEXT,
+                descricao VARCHAR(255)
+            );",
+
             // TABELA 1: USUARIOS
             "CREATE TABLE IF NOT EXISTS usuarios (
                 id SERIAL PRIMARY KEY,
@@ -209,7 +211,7 @@ function run_migrations($pdo) {
         }
 
         // ---------------------------------------------------------------------
-        // 3. CRIAÇÃO DE TRIGGERS E ÍNDICES (PÓS-CRIAÇÃO DE TABELAS)
+        // 3. CRIAÇÃO DE TRIGGERS E ÍNDICES
         // ---------------------------------------------------------------------
 
         // TRIGGER (Após criar a tabela suporte_mensagens)
@@ -231,22 +233,22 @@ function run_migrations($pdo) {
 
         $senhaHash = password_hash('123456', PASSWORD_DEFAULT);
 
-        // Insere o usuário admin SE NÃO EXISTIR
+        // Usuários
         $stmt = $pdo->prepare("SELECT id FROM usuarios WHERE email = ?");
+
         $stmt->execute(['admin@email.com']);
         if ($stmt->rowCount() == 0) {
             $stmtInsert = $pdo->prepare("INSERT INTO usuarios (nome, email, senha, nivel_acesso) VALUES (?, ?, ?, ?);");
             $stmtInsert->execute(['Administrador', 'admin@email.com', $senhaHash, 'admin']);
         }
 
-        // Insere o usuário membro SE NÃO EXISTIR
         $stmt->execute(['membro@email.com']);
         if ($stmt->rowCount() == 0) {
             $stmtInsert = $pdo->prepare("INSERT INTO usuarios (nome, email, senha, nivel_acesso) VALUES (?, ?, ?, ?);");
             $stmtInsert->execute(['Membro Teste', 'membro@email.com', $senhaHash, 'membro']);
         }
 
-        // Insere Gateway Padrão (Ex: PIX) SE NÃO EXISTIR
+        // Gateway Padrão
         $stmt = $pdo->prepare("SELECT id FROM gateways_pagamento WHERE nome = 'PIX'");
         $stmt->execute();
         if ($stmt->rowCount() == 0) {
@@ -254,6 +256,25 @@ function run_migrations($pdo) {
              $stmtInsert->execute();
         }
 
+        // ⭐ NOVO: INSERÇÃO DAS CHAVES DE CONFIGURAÇÃO NA TABELA
+        $config_keys = [
+            'MAILGUN_API_KEY' => ['a70370241218ff94a9eea3e39ac6f86b-556e0aa9-fb956281', 'Chave de API secreta da Mailgun.'],
+            'MAILGUN_DOMAIN' => ['lafstech.store', 'Domínio de envio da Mailgun.'],
+            'MAILGUN_FROM_EMAIL' => ['noreply@lafstech.store', 'E-mail de remetente.'],
+            'MAILGUN_API_URL' => ['https://api.mailgun.net/v3', 'Endpoint da API da Mailgun (US).'],
+            'PIXUP_CLIENT_ID' => ['notfakeluccas_2735058915962624', 'ID do Cliente PixUp.'],
+            'PIXUP_CLIENT_SECRET' => ['3e56523361cb1b25b2074302ed1e93e5111f62c948111250deacf67877838062', 'Chave secreta do Cliente PixUp.'],
+        ];
+
+        foreach ($config_keys as $chave => list($valor, $descricao)) {
+            $stmt = $pdo->prepare("SELECT id FROM configuracoes WHERE chave = ?");
+            $stmt->execute([$chave]);
+            if ($stmt->rowCount() == 0) {
+                $stmtInsert = $pdo->prepare("INSERT INTO configuracoes (chave, valor, descricao) VALUES (?, ?, ?);");
+                $stmtInsert->execute([$chave, $valor, $descricao]);
+            }
+        }
+        // FIM NOVO SEEDING
 
         $pdo->commit();
         echo "Migração do banco de dados concluída com sucesso! (Autostart)\n";
@@ -262,8 +283,6 @@ function run_migrations($pdo) {
         if ($pdo->inTransaction()) {
              $pdo->rollBack();
         }
-        // Em um ambiente de produção, apenas registre o erro, não use 'die()'
         error_log("ERRO FATAL NA MIGRAÇÃO: " . $e->getMessage());
-        // Se este script rodar no config.php, não podemos dar 'die' na produção.
     }
 }

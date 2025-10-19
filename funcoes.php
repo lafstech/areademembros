@@ -1,15 +1,16 @@
 <?php
 // Arquivo: funcoes.php (Na raiz do projeto)
 
-/**
- * Funções utilitárias para o sistema, incluindo envio de e-mails via Mailgun.
- */
+// Garante que a conexão PDO ($pdo) e as funções globais estejam carregadas
+// (config.php já faz isso)
+require_once 'config.php';
 
-// Garante que as configurações da Mailgun estejam carregadas
-// CORREÇÃO: Usamos __DIR__ para garantir que o arquivo seja encontrado
-if (file_exists(__DIR__ . '/mailgun_config.php')) {
-    require_once __DIR__ . '/mailgun_config.php';
-}
+// ⭐ IMPORTANTE: O arquivo load_settings.php DEVE SER INCLUÍDO ANTES DE USAR
+// as constantes de configuração.
+// Como load_settings.php depende de $pdo (que está no config.php),
+// você deve incluir load_settings.php no SEU config.php, após a criação de $pdo.
+
+// Removido: require_once __DIR__ . '/mailgun_config.php'; // Chaves agora vêm do DB
 
 /**
  * Envia um e-mail através da API da Mailgun.
@@ -19,16 +20,10 @@ if (file_exists(__DIR__ . '/mailgun_config.php')) {
  * @return bool True se o envio for bem-sucedido (API retornar ID), False caso contrário.
  */
 function enviarEmailMailgun($para, $assunto, $html_body) {
-    // 1. Verifica se as constantes de configuração foram definidas
+    // 1. Verifica se as constantes de configuração foram definidas (agora lidas do DB)
+    // Usamos 'defined' para verificar se foram definidas via define() em load_settings.php
     if (!defined('MAILGUN_API_KEY') || !defined('MAILGUN_DOMAIN') || !defined('MAILGUN_FROM_EMAIL')) {
-        // Esta mensagem de erro será registrada se o mailgun_config.php não foi lido ou está incompleto.
-        error_log("ERRO: Configurações da Mailgun (API KEY, DOMAIN ou FROM_EMAIL) ausentes.");
-        return false;
-    }
-
-    // A constante MAILGUN_API_URL deve ser definida no mailgun_config.php
-    if (!defined('MAILGUN_API_URL')) {
-        error_log("ERRO: A constante MAILGUN_API_URL está ausente.");
+        error_log("ERRO: Configurações da Mailgun (API KEY, DOMAIN ou FROM_EMAIL) ausentes no DB.");
         return false;
     }
 
@@ -43,28 +38,13 @@ function enviarEmailMailgun($para, $assunto, $html_body) {
     ];
 
     curl_setopt_array($ch, [
-        // Endpoint: Ex: https://api.mailgun.net/v3/seudominio/messages
         CURLOPT_URL => MAILGUN_API_URL . "/" . MAILGUN_DOMAIN . "/messages",
-
-        // Autenticação HTTP básica com a chave da API
         CURLOPT_USERPWD => "api:" . MAILGUN_API_KEY,
-
-        // Método POST
         CURLOPT_POST => true,
-
-        // Dados a serem enviados
         CURLOPT_POSTFIELDS => $postData,
-
-        // Retornar a resposta em vez de exibi-la
         CURLOPT_RETURNTRANSFER => true,
-
-        // Nota: CURLOPT_SSL_VERIFYPEER = true (padrão e seguro)
         CURLOPT_SSL_VERIFYPEER => true,
-
-        // Tempo limite
         CURLOPT_TIMEOUT => 30,
-
-        // Garante que o PHP use o tipo correto para o POST
         CURLOPT_SAFE_UPLOAD => true,
     ]);
 
@@ -82,14 +62,11 @@ function enviarEmailMailgun($para, $assunto, $html_body) {
     // 4. Analisa a resposta da API (Mailgun retorna 200/OK em caso de sucesso)
     if ($httpCode >= 200 && $httpCode < 300) {
         $result = json_decode($response, true);
-        // Verifica se a Mailgun retornou um ID de mensagem
         return isset($result['id']);
     } else {
         error_log("ERRO MAILGUN HTTP {$httpCode}: Resposta: " . $response);
         return false;
     }
 }
-
 // --- Você pode adicionar outras funções utilitárias aqui no futuro ---
-
 ?>

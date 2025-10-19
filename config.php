@@ -70,13 +70,16 @@ try {
         PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
     ]);
 
-    // ⭐ NOVO: CHAMADA AUTOMÁTICA DA MIGRAÇÃO
-    // Inclui e executa as migrações/seeding se necessário.
-    // Usamos require_once para que o script de migração seja definido apenas uma vez.
+    // ⭐ PASSO 1: CHAMADA AUTOMÁTICA DA MIGRAÇÃO
     if (file_exists('migrations.php')) {
         require_once 'migrations.php';
-        // A função run_migrations() deve ser definida em migrations.php
         run_migrations($pdo);
+    }
+
+    // ⭐ PASSO 2: CARREGAR AS CONFIGURAÇÕES DO BANCO (LOAD_SETTINGS)
+    // O load_settings deve estar no mesmo nível ou ser referenciado corretamente
+    if (file_exists('load_settings.php')) {
+        require_once 'load_settings.php';
     }
 
 
