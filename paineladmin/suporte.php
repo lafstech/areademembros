@@ -3,6 +3,72 @@
 declare(strict_types=1);
 
 require_once '../config.php';
+
+// ===================================================================
+// === MANIPULADOR DE REQUISIÇÕES AJAX (MODIFICADO)
+// ===================================================================
+function handleAjaxRequest($pdo) {
+    if (isset($_GET['ajax_action'])) {
+        verificarAcesso('admin'); // Protege os endpoints AJAX
+        header('Content-Type: application/json');
+
+        $action = $_GET['ajax_action'];
+        $response = ['success' => false, 'message' => 'Ação inválida.'];
+
+        try {
+            // ⭐ NOVO: AÇÃO PARA BUSCAR NOVAS MENSAGENS (POLLING)
+            if ($action === 'get_new_messages') {
+                $ticket_id = (int)($_GET['ticket_id'] ?? 0);
+                $last_message_id = (int)($_GET['last_message_id'] ?? 0);
+
+                if ($ticket_id <= 0) {
+                    throw new Exception("ID do ticket inválido.");
+                }
+
+                // Busca mensagens MAIS NOVAS que a última ID, e que NÃO SEJAM do admin
+                $stmt_msg = $pdo->prepare("
+                    SELECT m.*, u.nome AS remetente_nome, u.nivel_acesso AS remetente_nivel
+                    FROM suporte_mensagens m
+                    JOIN usuarios u ON m.remetente_id = u.id
+                    WHERE m.ticket_id = ?
+                      AND m.id > ?
+                      AND u.nivel_acesso != 'admin'
+                    ORDER BY m.data_envio ASC
+                ");
+                $stmt_msg->execute([$ticket_id, $last_message_id]);
+                $new_messages = $stmt_msg->fetchAll(PDO::FETCH_ASSOC);
+
+                if (count($new_messages) > 0) {
+                    // Se buscamos novas mensagens, marcamos que o admin as viu
+                    $stmt_mark_read = $pdo->prepare("
+                        UPDATE suporte_tickets SET admin_ultima_visualizacao = NOW()
+                        WHERE id = ?
+                    ");
+                    $stmt_mark_read->execute([$ticket_id]);
+                }
+
+                $response = [
+                    'success' => true,
+                    'messages' => $new_messages
+                ];
+            }
+
+        } catch (Exception $e) {
+            $response['message'] = $e->getMessage();
+        }
+
+        echo json_encode($response);
+        exit; // Termina a execução do script aqui
+    }
+}
+// Executa o manipulador AJAX. Se for uma chamada AJAX, o script para aqui.
+handleAjaxRequest($pdo);
+
+
+// ===================================================================
+// === EXECUÇÃO NORMAL DA PÁGINA (se não for AJAX)
+// ===================================================================
+
 verificarAcesso('admin'); // Proteção para administradores
 
 $nome_usuario = htmlspecialchars($_SESSION['usuario_nome']);
@@ -17,7 +83,7 @@ $ticket_id_view = isset($_GET['ticket_id']) ? (int)$_GET['ticket_id'] : 0;
 
 
 // ===================================================================
-// === LÓGICA DE POST (Responder / Fechar Ticket)
+// === LÓGICA DE POST (Responder / Fechar Ticket) - (Sem alteração)
 // ===================================================================
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     try {
@@ -110,7 +176,8 @@ $view_data = [
     'ticket_info' => null,
     'mensagens' => [],
     'usuario_ticket' => null,
-    'filtro_status' => 'ABERTO'
+    'filtro_status' => 'ABERTO',
+    'last_message_id' => 0 // ⭐ NOVO: Rastrear o ID da última mensagem
 ];
 
 if ($ticket_id_view > 0) {
@@ -151,6 +218,12 @@ if ($ticket_id_view > 0) {
         ");
         $stmt_msgs->execute([$ticket_id_view]);
         $view_data['mensagens'] = $stmt_msgs->fetchAll(PDO::FETCH_ASSOC);
+
+        // ⭐ NOVO: Armazena o ID da última mensagem para o polling
+        if (!empty($view_data['mensagens'])) {
+            $last_msg = end($view_data['mensagens']);
+            $view_data['last_message_id'] = $last_msg['id'];
+        }
     }
 
 } else {
@@ -169,11 +242,13 @@ if ($ticket_id_view > 0) {
     }
 
     // Busca a lista de tickets
+    // ⭐ MODIFICADO: (t.data_ultima_atualizacao > t.admin_ultima_visualizacao AND t.status = 'ABERTO') AS admin_nao_leu
+    // O admin só precisa ser notificado se o status for 'ABERTO' (aguardando ele)
     $stmt_list = $pdo->prepare("
         SELECT
             t.id, t.assunto, t.status, t.data_ultima_atualizacao,
             u.nome AS usuario_nome,
-            (t.data_ultima_atualizacao > t.admin_ultima_visualizacao) AS admin_nao_leu
+            (t.data_ultima_atualizacao > t.admin_ultima_visualizacao AND t.status = 'ABERTO') AS admin_nao_leu
         FROM suporte_tickets t
         JOIN usuarios u ON t.usuario_id = u.id
         $sql_where
@@ -212,7 +287,7 @@ function getStatusBadge($status) {
     <title>Suporte ao Cliente - Admin Panel</title>
     <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <style>
-        /* === CSS BASE (da index.php) === */
+        /* === CSS (Sem alteração) === */
         :root {
             --primary-color: #e11d48; --background-color: #111827; --sidebar-color: #1f2937;
             --glass-background: rgba(31, 41, 55, 0.5); --text-color: #f9fafb; --text-muted: #9ca3af;
@@ -249,7 +324,6 @@ function getStatusBadge($status) {
         .main-content header h1 { font-size: 2rem; font-weight: 600; }
         .main-content header p { color: var(--text-muted); }
 
-        /* === ESTILOS DE COMPONENTES (Unificados) === */
         .management-card { background: var(--glass-background); border: 1px solid var(--border-color); border-radius: 12px; padding: 2rem; margin-bottom: 2rem; }
         .management-card h2 { font-size: 1.5rem; margin-bottom: 1.5rem; border-bottom: 1px solid var(--border-color); padding-bottom: 1rem; }
         .form-group { margin-bottom: 1.5rem; }
@@ -279,15 +353,11 @@ function getStatusBadge($status) {
         .alert-success { background-color: rgba(34, 197, 94, 0.2); color: var(--success-color); }
         .alert-error { background-color: rgba(248, 113, 113, 0.2); color: var(--error-color); }
 
-        /* === ESTILOS ESPECÍFICOS (suporte.php) === */
-
-        /* Abas de Filtro */
         .filter-tabs { display: flex; gap: 0.5rem; margin-bottom: 1.5rem; border-bottom: 1px solid var(--border-color); }
         .filter-tabs a { padding: 0.75rem 1.5rem; text-decoration: none; color: var(--text-muted); font-weight: 500; border-bottom: 3px solid transparent; }
         .filter-tabs a:hover { color: var(--text-color); }
         .filter-tabs a.active { color: var(--primary-color); border-bottom-color: var(--primary-color); }
 
-        /* Badges de Status e "Novo" */
         .badge { padding: 0.25rem 0.6rem; font-size: 0.75rem; font-weight: 600; border-radius: 20px; }
         .badge-warning { background-color: rgba(245, 158, 11, 0.2); color: var(--warning-color); }
         .badge-info { background-color: rgba(59, 130, 246, 0.2); color: var(--info-color); }
@@ -297,7 +367,6 @@ function getStatusBadge($status) {
 
         .data-table .btn-respond { font-size: 0.9rem; padding: 0.5rem 1rem; }
 
-        /* Header do Ticket (Modo Detalhe) */
         .ticket-header {
             display: flex; justify-content: space-between; align-items: flex-start;
             flex-wrap: wrap; gap: 1rem;
@@ -305,7 +374,6 @@ function getStatusBadge($status) {
         .ticket-header .user-info-ticket { font-size: 0.9rem; color: var(--text-muted); }
         .ticket-header .user-info-ticket strong { color: var(--text-color); }
 
-        /* Chat */
         .chat-wrapper {
             background-color: var(--background-color);
             border: 1px solid var(--border-color);
@@ -337,10 +405,10 @@ function getStatusBadge($status) {
             border-radius: 12px;
             line-height: 1.6;
             white-space: pre-wrap; /* Preserva quebras de linha */
+            word-wrap: break-word; /* Garante quebra de palavras longas */
         }
         .message-time { font-size: 0.75rem; color: var(--text-muted); margin-top: 0.25rem; }
 
-        /* Mensagem do Usuário (Esquerda) */
         .message-user {
             align-self: flex-start;
         }
@@ -349,7 +417,6 @@ function getStatusBadge($status) {
             border-top-left-radius: 0;
         }
 
-        /* Mensagem do Admin (Direita) */
         .message-admin {
             align-self: flex-end;
             align-items: flex-end; /* Alinha a data à direita */
@@ -361,7 +428,6 @@ function getStatusBadge($status) {
         }
         .message-admin .message-time { color: var(--text-muted); }
 
-        /* Mensagem do Sistema (Central) */
         .message-system {
             align-self: center;
             text-align: center;
@@ -372,7 +438,6 @@ function getStatusBadge($status) {
             border-radius: 20px;
         }
 
-        /* Formulário de Resposta */
         .chat-reply-form {
             border-top: 1px solid var(--border-color);
             padding: 1.5rem;
@@ -380,7 +445,6 @@ function getStatusBadge($status) {
         .chat-reply-form .btn { margin-top: 1rem; }
 
 
-        /* --- RESPONSIVIDADE (Unificada) --- */
         @media (max-width: 1024px) {
             .sidebar { width: 280px; transform: translateX(-280px); box-shadow: 5px 0 15px rgba(0, 0, 0, 0.5); z-index: 1002; }
             .user-profile { margin-top: 1.5rem; position: relative; }
@@ -504,7 +568,10 @@ function getStatusBadge($status) {
                     </div>
 
                     <div class="chat-wrapper">
-                        <div class="chat-history" id="chat-history">
+                        <div class="chat-history" id="chat-history"
+                             data-ticket-id="<?php echo $ticket['id']; ?>"
+                             data-last-message-id="<?php echo $view_data['last_message_id']; ?>">
+
                             <?php foreach ($view_data['mensagens'] as $msg): ?>
                                 <?php
                                     $is_admin = ($msg['remetente_nivel'] === 'admin');
@@ -620,11 +687,100 @@ function getStatusBadge($status) {
         }
 
         // --- Lógica Específica (suporte.php) ---
-        // Scrollar o chat para a última mensagem
         const chatHistory = document.getElementById('chat-history');
+
+        // Helper para formatar data em JS (similar ao do PHP)
+        const formatDate_JS = (dateStr) => {
+            if (!dateStr) return 'N/A';
+            return new Date(dateStr).toLocaleString('pt-BR', {
+                day: '2-digit', month: '2-digit', year: 'numeric',
+                hour: '2-digit', minute: '2-digit'
+            });
+        };
+
+        // ⭐ NOVO: LÓGICA DE POLLING (BUSCA DE MENSAGENS)
         if (chatHistory) {
+            // 1. Scrollar o chat para a última mensagem no carregamento da página
             chatHistory.scrollTop = chatHistory.scrollHeight;
+
+            // 2. Pegar dados do chat
+            const ticketId = chatHistory.dataset.ticketId;
+            let lastMessageId = parseInt(chatHistory.dataset.lastMessageId || '0');
+
+            // 3. Helper para adicionar novas mensagens ao DOM (de forma segura)
+            const appendMessageToChat = (msg) => {
+                // Esta função só é chamada para mensagens de usuário vindas do polling
+                const msgDiv = document.createElement('div');
+                msgDiv.className = 'message-user';
+
+                const senderDiv = document.createElement('div');
+                senderDiv.className = 'message-sender';
+                senderDiv.textContent = msg.remetente_nome || 'Usuário'; // Protege contra XSS
+
+                const bubbleDiv = document.createElement('div');
+                bubbleDiv.className = 'message-bubble';
+                // Protege contra XSS e replica o nl2br
+                bubbleDiv.innerHTML = msg.mensagem.replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/\n/g, '<br>');
+
+                const timeDiv = document.createElement('div');
+                timeDiv.className = 'message-time';
+                timeDiv.textContent = formatDate_JS(msg.data_envio); // Protege contra XSS
+
+                msgDiv.appendChild(senderDiv);
+                msgDiv.appendChild(bubbleDiv);
+                msgDiv.appendChild(timeDiv);
+
+                chatHistory.appendChild(msgDiv);
+            };
+
+            // 4. Função de Polling (a cada 3 segundos)
+            const checkNewMessages = async () => {
+                try {
+                    const params = new URLSearchParams({
+                        ajax_action: 'get_new_messages',
+                        ticket_id: ticketId,
+                        last_message_id: lastMessageId
+                    });
+
+                    const response = await fetch(`suporte.php?${params.toString()}`);
+                    const data = await response.json();
+
+                    if (data.success && data.messages.length > 0) {
+                        let newLastId = lastMessageId;
+                        data.messages.forEach(msg => {
+                            appendMessageToChat(msg);
+                            newLastId = msg.id; // Atualiza o ID da última mensagem
+                        });
+
+                        lastMessageId = newLastId; // Atualiza o estado JS
+                        chatHistory.dataset.lastMessageId = newLastId; // Atualiza o estado DOM
+
+                        // Rola para baixo apenas se o usuário não estiver lendo o histórico
+                        // (a 100px do fundo)
+                        if (chatHistory.scrollHeight - chatHistory.scrollTop - chatHistory.clientHeight < 100) {
+                             chatHistory.scrollTop = chatHistory.scrollHeight;
+                        }
+
+                        // Atualiza o status na lista (se o usuário responder)
+                        // Isso é para o caso de o admin estar na lista e o usuário responder
+                        // (Melhoria futura, não implementada aqui para simplicidade)
+                    }
+                } catch (error) {
+                    console.error('Erro ao buscar novas mensagens:', error);
+                    // Para de fazer polling se houver um erro para não sobrecarregar
+                    if (pollingInterval) {
+                        clearInterval(pollingInterval);
+                    }
+                }
+            };
+
+            // 5. Inicia o Polling
+            // Só faz polling se o ticket não estiver fechado
+            <?php if ($view_data['ticket_info'] && $view_data['ticket_info']['status'] !== 'FECHADO'): ?>
+                const pollingInterval = setInterval(checkNewMessages, 3000); // 3000ms = 3 segundos
+            <?php endif; ?>
         }
+
     });
     </script>
 </body>
