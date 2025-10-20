@@ -258,7 +258,7 @@ function run_migrations($pdo) {
 
         // ⭐ NOVO: INSERÇÃO DAS CHAVES DE CONFIGURAÇÃO NA TABELA
         $config_keys = [
-            'MAILGUN_API_KEY' => ['altere o valor', 'Chave de API secreta da Mailgun.'],
+            'MAILGUN_API_KEY' => ['altere o valor1', 'Chave de API secreta da Mailgun.'],
             'MAILGUN_DOMAIN' => ['altere o valor', 'Domínio de envio da Mailgun.'],
             'MAILGUN_FROM_EMAIL' => ['altere o valor', 'E-mail de remetente.'],
             'MAILGUN_API_URL' => ['altere o valor', 'Endpoint da API da Mailgun (US).'],
