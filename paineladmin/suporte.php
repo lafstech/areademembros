@@ -5,98 +5,70 @@ declare(strict_types=1);
 require_once '../config.php';
 
 // ===================================================================
-// === MANIPULADOR DE REQUISIÇÕES AJAX (MODIFICADO)
+// === MANIPULADOR DE REQUISIÇÕES AJAX (Sem alteração no PHP)
 // ===================================================================
 function handleAjaxRequest($pdo) {
     if (isset($_GET['ajax_action'])) {
-        verificarAcesso('admin'); // Protege os endpoints AJAX
+        verificarAcesso('admin');
         header('Content-Type: application/json');
 
         $action = $_GET['ajax_action'];
         $response = ['success' => false, 'message' => 'Ação inválida.'];
-        $admin_id = (int)$_SESSION['usuario_id']; // Pega o ID do admin da sessão
+        $admin_id = (int)$_SESSION['usuario_id'];
 
         try {
             // --- AÇÃO: Admin envia uma nova resposta (via POST AJAX) ---
             if ($action === 'admin_reply' && $_SERVER['REQUEST_METHOD'] === 'POST') {
                 $post_ticket_id = (int)($_POST['ticket_id'] ?? 0);
                 $mensagem = trim((string)($_POST['mensagem'] ?? ''));
-                $anexo_url = null; // URL do anexo a ser salva no DB
+                $anexo_url = null;
 
-                if ($post_ticket_id <= 0) {
-                    throw new Exception("ID do ticket inválido.");
-                }
-                if (empty($mensagem) && empty($_FILES['anexo']['name'])) {
-                    throw new Exception("A mensagem ou anexo não pode estar vazio.");
-                }
+                if ($post_ticket_id <= 0) throw new Exception("ID do ticket inválido.");
+                if (empty($mensagem) && empty($_FILES['anexo']['name'])) throw new Exception("A mensagem ou anexo não pode estar vazio.");
 
-                // --- Lógica de Upload de Anexo ---
+                // --- Lógica de Upload ---
                 if (isset($_FILES['anexo']) && $_FILES['anexo']['error'] === UPLOAD_ERR_OK) {
                     $file = $_FILES['anexo'];
                     $allowed_types = ['image/jpeg', 'image/png', 'image/gif'];
                     $max_size = 5 * 1024 * 1024; // 5 MB
 
-                    if ($file['size'] > $max_size) {
-                        throw new Exception("Arquivo muito grande. Limite de 5MB.");
-                    }
-                    if (!in_array($file['type'], $allowed_types)) {
-                        throw new Exception("Formato de arquivo inválido. Apenas JPG, PNG e GIF são permitidos.");
-                    }
+                    if ($file['size'] > $max_size) throw new Exception("Arquivo muito grande (Max 5MB).");
+                    if (!in_array($file['type'], $allowed_types)) throw new Exception("Formato inválido (JPG, PNG, GIF).");
 
-                    // Define o diretório de upload
                     $upload_dir_base = '../uploads/suporte/';
                     if (!is_dir($upload_dir_base)) {
-                        if (!mkdir($upload_dir_base, 0755, true)) {
-                            throw new Exception("Falha ao criar diretório de uploads. Verifique as permissões.");
-                        }
+                        if (!mkdir($upload_dir_base, 0755, true)) throw new Exception("Falha ao criar diretório uploads.");
                     }
 
-                    // Gera nome único
                     $filename = uniqid('ticket_' . $post_ticket_id . '_') . '_' . basename($file['name']);
                     $upload_path = $upload_dir_base . $filename;
 
                     if (move_uploaded_file($file['tmp_name'], $upload_path)) {
-                        // Salva o caminho *relativo* à raiz do site (não ao admin)
                         $anexo_url = 'uploads/suporte/' . $filename;
                     } else {
-                        throw new Exception("Falha ao mover o arquivo enviado.");
+                        throw new Exception("Falha ao mover o arquivo.");
                     }
                 }
 
                 $pdo->beginTransaction();
 
-                // 1. Insere a mensagem do admin
-                $stmt_msg = $pdo->prepare("
-                    INSERT INTO suporte_mensagens (ticket_id, remetente_id, mensagem, anexo_url)
-                    VALUES (?, ?, ?, ?)
-                ");
+                // 1. Insere a mensagem
+                $stmt_msg = $pdo->prepare("INSERT INTO suporte_mensagens (ticket_id, remetente_id, mensagem, anexo_url) VALUES (?, ?, ?, ?)");
                 $stmt_msg->execute([$post_ticket_id, $admin_id, $mensagem, $anexo_url]);
                 $new_message_id = $pdo->lastInsertId();
 
-                // 2. Atualiza o status do ticket
-                $stmt_ticket = $pdo->prepare("
-                    UPDATE suporte_tickets
-                    SET status = 'AGUARDANDO_USUARIO', admin_ultima_visualizacao = NOW()
-                    WHERE id = ?
-                ");
+                // 2. Atualiza o status
+                $stmt_ticket = $pdo->prepare("UPDATE suporte_tickets SET status = 'AGUARDANDO_USUARIO', admin_ultima_visualizacao = NOW() WHERE id = ?");
                 $stmt_ticket->execute([$post_ticket_id]);
 
                 $pdo->commit();
 
-                // 3. Busca a mensagem recém-criada para retornar ao JS
-                $stmt_new = $pdo->prepare("
-                    SELECT m.*, u.nome AS remetente_nome, u.nivel_acesso AS remetente_nivel
-                    FROM suporte_mensagens m
-                    JOIN usuarios u ON m.remetente_id = u.id
-                    WHERE m.id = ?
-                ");
+                // 3. Busca a mensagem recém-criada
+                $stmt_new = $pdo->prepare("SELECT m.*, u.nome AS remetente_nome, u.nivel_acesso AS remetente_nivel FROM suporte_mensagens m JOIN usuarios u ON m.remetente_id = u.id WHERE m.id = ?");
                 $stmt_new->execute([$new_message_id]);
                 $new_message_data = $stmt_new->fetch(PDO::FETCH_ASSOC);
 
-                $response = [
-                    'success' => true,
-                    'message' => $new_message_data
-                ];
+                $response = ['success' => true, 'message' => $new_message_data];
             }
 
             // --- AÇÃO: Buscar Novas Mensagens (Polling) ---
@@ -104,40 +76,24 @@ function handleAjaxRequest($pdo) {
                 $ticket_id = (int)($_GET['ticket_id'] ?? 0);
                 $last_message_id = (int)($_GET['last_message_id'] ?? 0);
 
-                if ($ticket_id <= 0) {
-                    throw new Exception("ID do ticket inválido.");
-                }
+                if ($ticket_id <= 0) throw new Exception("ID do ticket inválido.");
 
                 $stmt_msg = $pdo->prepare("
                     SELECT m.*, u.nome AS remetente_nome, u.nivel_acesso AS remetente_nivel
-                    FROM suporte_mensagens m
-                    JOIN usuarios u ON m.remetente_id = u.id
-                    WHERE m.ticket_id = ?
-                      AND m.id > ?
-                      AND u.nivel_acesso != 'admin'
-                    ORDER BY m.data_envio ASC
-                ");
+                    FROM suporte_mensagens m JOIN usuarios u ON m.remetente_id = u.id
+                    WHERE m.ticket_id = ? AND m.id > ? AND u.nivel_acesso != 'admin'
+                    ORDER BY m.data_envio ASC");
                 $stmt_msg->execute([$ticket_id, $last_message_id]);
                 $new_messages = $stmt_msg->fetchAll(PDO::FETCH_ASSOC);
 
                 $status_changed = false;
                 if (count($new_messages) > 0) {
-                    // Se buscamos novas mensagens, marcamos que o admin as viu
-                    // E mudamos o status do ticket para ABERTO (pois o usuário respondeu)
-                    $stmt_update = $pdo->prepare("
-                        UPDATE suporte_tickets
-                        SET admin_ultima_visualizacao = NOW(), status = 'ABERTO'
-                        WHERE id = ?
-                    ");
+                    $stmt_update = $pdo->prepare("UPDATE suporte_tickets SET admin_ultima_visualizacao = NOW(), status = 'ABERTO' WHERE id = ?");
                     $stmt_update->execute([$ticket_id]);
-                    $status_changed = true; // ⭐ Indica que o status mudou
+                    $status_changed = true;
                 }
 
-                $response = [
-                    'success' => true,
-                    'messages' => $new_messages,
-                    'status_changed' => $status_changed
-                ];
+                $response = ['success' => true, 'messages' => $new_messages, 'status_changed' => $status_changed];
             }
 
         } catch (Exception $e) {
@@ -146,21 +102,19 @@ function handleAjaxRequest($pdo) {
         }
 
         echo json_encode($response);
-        exit; // Termina a execução do script aqui
+        exit;
     }
 }
-// Executa o manipulador AJAX. Se for uma chamada AJAX, o script para aqui.
 handleAjaxRequest($pdo);
 
-
 // ===================================================================
-// === EXECUÇÃO NORMAL DA PÁGINA (se não for AJAX)
+// === EXECUÇÃO NORMAL DA PÁGINA
 // ===================================================================
 
-verificarAcesso('admin'); // Proteção para administradores
+verificarAcesso('admin');
 
 $nome_usuario = htmlspecialchars($_SESSION['usuario_nome']);
-$admin_id = (int)$_SESSION['usuario_id']; // ID do admin logado
+$admin_id = (int)$_SESSION['usuario_id'];
 $pagina_atual = basename($_SERVER['PHP_SELF']);
 
 $successMessage = null;
@@ -168,9 +122,8 @@ $errorMessage = null;
 
 $ticket_id_view = isset($_GET['ticket_id']) ? (int)$_GET['ticket_id'] : 0;
 
-
 // ===================================================================
-// === LÓGICA DE POST (Apenas Fechar Ticket)
+// === LÓGICA DE POST (Fechar Ticket)
 // ===================================================================
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     try {
@@ -178,25 +131,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $action = $_POST['action'] ?? '';
         $post_ticket_id = (int)($_POST['ticket_id'] ?? 0);
 
-        if ($post_ticket_id <= 0) {
-            throw new Exception("ID do ticket inválido.");
-        }
+        if ($post_ticket_id <= 0) throw new Exception("ID do ticket inválido.");
 
-        // --- AÇÃO: Admin fecha o ticket ---
         if ($action === 'close_ticket') {
-
-            $stmt_ticket = $pdo->prepare("
-                UPDATE suporte_tickets
-                SET status = 'FECHADO', data_fechamento = NOW(), fechado_por = 'admin'
-                WHERE id = ?
-            ");
+            $stmt_ticket = $pdo->prepare("UPDATE suporte_tickets SET status = 'FECHADO', data_fechamento = NOW(), fechado_por = 'admin' WHERE id = ?");
             $stmt_ticket->execute([$post_ticket_id]);
 
             $mensagem_sistema = "[TICKET FECHADO PELO SUPORTE]";
-            $stmt_msg = $pdo->prepare("
-                INSERT INTO suporte_mensagens (ticket_id, remetente_id, mensagem)
-                VALUES (?, ?, ?)
-            ");
+            $stmt_msg = $pdo->prepare("INSERT INTO suporte_mensagens (ticket_id, remetente_id, mensagem) VALUES (?, ?, ?)");
             $stmt_msg->execute([$post_ticket_id, $admin_id, $mensagem_sistema]);
 
             $pdo->commit();
@@ -205,9 +147,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             header("Location: suporte.php");
             exit;
         }
-
-        // Se houver outras ações POST (não-ajax), elas iriam aqui
-        // $pdo->commit(); // Removido pois a única ação é 'close_ticket' que já faz commit/exit
+        // $pdo->commit(); // Não necessário pois a única ação faz commit/exit
 
     } catch (Exception $e) {
         if ($pdo->inTransaction()) $pdo->rollBack();
@@ -220,11 +160,10 @@ if (isset($_SESSION['flash_success'])) {
     unset($_SESSION['flash_success']);
 }
 
-
 // ===================================================================
-// === LÓGICA DE EXIBIÇÃO (GET) - (Sem alteração)
+// === LÓGICA DE EXIBIÇÃO (GET)
 // ===================================================================
-
+// ... (Lógica de busca de dados $view_data permanece a mesma) ...
 $view_data = [
     'modo_lista' => true,
     'tickets' => [],
@@ -307,23 +246,25 @@ if ($ticket_id_view > 0) {
     $view_data['tickets'] = $stmt_list->fetchAll(PDO::FETCH_ASSOC);
 }
 
-// Função helper para formatar datas
+
+// Função helper para formatar datas (com H:i)
 function formatarData($data) {
     if (!$data) return 'N/A';
     return date("d/m/Y H:i", strtotime($data));
+}
+// Função helper para formatar datas (só H:i)
+function formatarHora($data) {
+     if (!$data) return 'N/A';
+    return date("H:i", strtotime($data));
 }
 
 // Função helper para badges de status
 function getStatusBadge($status) {
     switch ($status) {
-        case 'ABERTO':
-            return '<span class="badge badge-warning">Aguardando Suporte</span>';
-        case 'AGUARDANDO_USUARIO':
-            return '<span class="badge badge-info">Aguardando Usuário</span>';
-        case 'FECHADO':
-            return '<span class="badge badge-muted">Fechado</span>';
-        default:
-            return '<span class="badge badge-muted">' . htmlspecialchars($status) . '</span>';
+        case 'ABERTO': return '<span class="badge badge-warning">Aguardando Suporte</span>';
+        case 'AGUARDANDO_USUARIO': return '<span class="badge badge-info">Aguardando Usuário</span>';
+        case 'FECHADO': return '<span class="badge badge-muted">Fechado</span>';
+        default: return '<span class="badge badge-muted">' . htmlspecialchars($status) . '</span>';
     }
 }
 ?>
@@ -335,8 +276,8 @@ function getStatusBadge($status) {
     <title>Suporte ao Cliente - Admin Panel</title>
     <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <style>
-        /* === CSS (Base) === */
-        :root {
+        /* === CSS Base (Admin) === */
+        :root { /* ... Cores ... */
             --primary-color: #e11d48; --background-color: #111827; --sidebar-color: #1f2937;
             --glass-background: rgba(31, 41, 55, 0.5); --text-color: #f9fafb; --text-muted: #9ca3af;
             --border-color: rgba(255, 255, 255, 0.1); --success-color: #22c55e; --error-color: #f87171;
@@ -344,8 +285,8 @@ function getStatusBadge($status) {
         }
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body { font-family: 'Poppins', sans-serif; background-color: var(--background-color); color: var(--text-color); display: flex; }
-
-        .sidebar { width: 260px; background-color: var(--sidebar-color); height: 100vh; position: fixed; left:0; top:0; padding: 2rem 1.5rem; display: flex; flex-direction: column; border-right: 1px solid var(--border-color); z-index: 1000; transition: transform 0.3s ease; }
+        /* ... Sidebar, Main Content, Menu Toggle, Header ... */
+         .sidebar { width: 260px; background-color: var(--sidebar-color); height: 100vh; position: fixed; left:0; top:0; padding: 2rem 1.5rem; display: flex; flex-direction: column; border-right: 1px solid var(--border-color); z-index: 1000; transition: transform 0.3s ease; }
         .sidebar .logo { font-size: 1.5rem; font-weight: 700; margin-bottom: 3rem; text-align: center; }
         .sidebar .logo span { color: var(--primary-color); }
         .sidebar nav { flex-grow: 1; overflow-y: auto; scrollbar-width: thin; scrollbar-color: var(--primary-color) transparent; }
@@ -372,22 +313,14 @@ function getStatusBadge($status) {
         .main-content header h1 { font-size: 2rem; font-weight: 600; }
         .main-content header p { color: var(--text-muted); }
 
+        /* === Componentes (Admin) === */
         .management-card { background: var(--glass-background); border: 1px solid var(--border-color); border-radius: 12px; padding: 2rem; margin-bottom: 2rem; }
         .management-card h2 { font-size: 1.5rem; margin-bottom: 1.5rem; border-bottom: 1px solid var(--border-color); padding-bottom: 1rem; }
         .form-group { margin-bottom: 1.5rem; }
         .form-group label { display: block; font-weight: 600; margin-bottom: 0.5rem; }
         .form-group input, .form-group textarea { width: 100%; padding: 0.75rem 1rem; background-color: var(--background-color); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-color); font-size: 1rem; font-family: 'Poppins', sans-serif; }
-        /* ⭐ NOVO: Estilo para input[type=file] */
-        .form-group input[type="file"] {
-            padding: 0.5rem;
-            background-color: var(--glass-background);
-        }
-        .form-group input[type="file"]::file-selector-button {
-            background-color: var(--primary-color);
-            color: white; border: none; padding: 0.5rem 1rem;
-            border-radius: 6px; cursor: pointer; margin-right: 1rem;
-            font-family: 'Poppins', sans-serif; font-weight: 500;
-        }
+        .form-group input[type="file"] { padding: 0.5rem; background-color: var(--glass-background); }
+        .form-group input[type="file"]::file-selector-button { background-color: var(--primary-color); color: white; border: none; padding: 0.5rem 1rem; border-radius: 6px; cursor: pointer; margin-right: 1rem; font-family: 'Poppins', sans-serif; font-weight: 500; }
         .form-group textarea { resize: vertical; min-height: 120px; }
         .form-group input:focus, .form-group textarea:focus { border-color: var(--primary-color); outline: none; }
 
@@ -427,13 +360,9 @@ function getStatusBadge($status) {
 
         .data-table .btn-respond { font-size: 0.9rem; padding: 0.5rem 1rem; }
 
-        .ticket-header {
-            display: flex; justify-content: space-between; align-items: flex-start;
-            flex-wrap: wrap; gap: 1rem;
-        }
-        .ticket-header .user-info-ticket { font-size: 0.9rem; color: var(--text-muted); }
-        .ticket-header .user-info-ticket strong { color: var(--text-color); }
+        .ticket-header { /* ... */ }
 
+        /* === ⭐ NOVO/AJUSTADO: Estilos do Chat (Inspirado no Cliente) === */
         .chat-wrapper {
             background-color: var(--background-color);
             border: 1px solid var(--border-color);
@@ -443,85 +372,117 @@ function getStatusBadge($status) {
             flex-direction: column;
         }
         .chat-history {
-            height: 400px;
+            height: 400px; /* Ou ajuste conforme necessário */
             overflow-y: auto;
             padding: 1.5rem;
             display: flex;
             flex-direction: column;
-            gap: 1.5rem;
+            gap: 1.5rem; /* Espaço entre mensagens */
             scrollbar-width: thin; scrollbar-color: var(--primary-color) transparent;
         }
         .chat-history::-webkit-scrollbar { width: 5px; }
         .chat-history::-webkit-scrollbar-thumb { background-color: var(--primary-color); border-radius: 10px; }
 
-        .chat-message {
+        .message-wrapper {
             display: flex;
-            flex-direction: column;
-            max-width: 75%;
+            gap: 1rem; /* Espaço entre ícone e conteúdo */
+            max-width: 85%; /* Limita a largura máxima da mensagem */
         }
-        .message-sender { font-weight: 600; font-size: 0.9rem; margin-bottom: 0.25rem; }
+        .message-icon {
+            flex-shrink: 0;
+            width: 36px;
+            height: 36px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background-color: var(--glass-background);
+        }
+        .message-icon svg {
+            width: 20px;
+            height: 20px;
+            color: var(--text-muted);
+        }
+        .message-content {
+            flex-grow: 1;
+        }
         .message-bubble {
-            padding: 1rem;
+            padding: 0.75rem 1rem; /* Padding um pouco menor */
             border-radius: 12px;
             line-height: 1.6;
             white-space: pre-wrap;
             word-wrap: break-word;
-
-            /* ⭐ CORREÇÃO: Largura e Alinhamento */
             width: -moz-fit-content;
-            width: fit-content;
-            text-align: left; /* Garante alinhamento à esquerda */
+            width: fit-content; /* Largura ajustável */
+            text-align: left;
+            display: flex; /* Para alinhar meta no fim */
+            flex-direction: column; /* Conteúdo em cima, meta embaixo */
         }
-        .message-time { font-size: 0.75rem; color: var(--text-muted); margin-top: 0.25rem; }
+        .message-meta {
+            font-size: 0.7rem; /* Menor */
+            color: var(--text-muted);
+            margin-top: 0.5rem; /* Espaço acima da meta */
+            align-self: flex-end; /* Alinha meta à direita */
+        }
 
-        .message-user {
+        /* Mensagem do Usuário (Esquerda) */
+        .message-wrapper.user {
             align-self: flex-start;
         }
-        .message-user .message-bubble {
+        .message-wrapper.user .message-icon {
+            /* Pode customizar a cor de fundo/ícone se quiser */
+        }
+        .message-wrapper.user .message-bubble {
             background-color: var(--glass-background);
-            border-top-left-radius: 0;
+            border-top-left-radius: 0; /* Canto pontudo */
         }
 
-        .message-admin {
+        /* Mensagem do Admin (Direita) */
+        .message-wrapper.admin {
             align-self: flex-end;
-            align-items: flex-end;
+            flex-direction: row-reverse; /* Inverte ícone e conteúdo */
         }
-        .message-admin .message-bubble {
+        .message-wrapper.admin .message-icon {
+             background-color: var(--primary-color);
+        }
+         .message-wrapper.admin .message-icon svg {
+             color: white;
+         }
+        .message-wrapper.admin .message-content {
+            display: flex; /* Necessário para alinhar o bubble à direita */
+            flex-direction: column;
+            align-items: flex-end; /* Alinha o bubble à direita */
+        }
+        .message-wrapper.admin .message-bubble {
             background-color: var(--primary-color);
             color: white;
-            border-top-right-radius: 0;
+            border-top-right-radius: 0; /* Canto pontudo */
         }
-        .message-admin .message-time { color: var(--text-muted); }
+         .message-wrapper.admin .message-meta {
+            color: rgba(255, 255, 255, 0.7); /* Cor da meta no balão admin */
+         }
 
+        /* Mensagem do Sistema */
         .message-system {
-            align-self: center;
-            text-align: center;
-            font-size: 0.85rem;
-            color: var(--text-muted);
-            background-color: var(--glass-background);
-            padding: 0.5rem 1rem;
-            border-radius: 20px;
+            align-self: center; text-align: center; font-size: 0.85rem;
+            color: var(--text-muted); background-color: var(--glass-background);
+            padding: 0.5rem 1rem; border-radius: 20px;
+            margin-top: 1rem; margin-bottom: 1rem;
         }
 
-        /* ⭐ NOVO: Estilo para Imagem no Chat */
         .chat-image-anexo {
-            max-width: 100%;
-            width: 300px; /* Largura máxima para imagem não ficar gigante */
-            height: auto;
-            border-radius: 8px;
-            margin-top: 10px; /* Espaço entre texto e imagem */
-            cursor: pointer;
-            display: block; /* Garante que ocupe a linha */
+            max-width: 100%; width: 300px; height: auto;
+            border-radius: 8px; margin-top: 10px; cursor: pointer; display: block;
         }
 
         .chat-reply-form {
-            border-top: 1px solid var(--border-color);
-            padding: 1.5rem;
+            border-top: 1px solid var(--border-color); padding: 1.5rem;
         }
         .chat-reply-form .btn { margin-top: 1rem; }
 
 
-        @media (max-width: 1024px) {
+        /* === Responsividade === */
+        @media (max-width: 1024px) { /* ... Sidebar ... */
             .sidebar { width: 280px; transform: translateX(-280px); box-shadow: 5px 0 15px rgba(0, 0, 0, 0.5); z-index: 1002; }
             .user-profile { margin-top: 1.5rem; position: relative; }
             .menu-toggle { display: flex; }
@@ -532,7 +493,7 @@ function getStatusBadge($status) {
         }
         @media (max-width: 576px) {
              .main-content { padding: 1rem; padding-top: 4.5rem; }
-             .chat-message { max-width: 90%; }
+             .message-wrapper { max-width: 95%; } /* Mensagens podem ser um pouco mais largas */
         }
     </style>
 </head>
@@ -542,68 +503,37 @@ function getStatusBadge($status) {
         <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" width="24" height="24"><path stroke-linecap="round" stroke-linejoin="round" d="M3.75 6.75h16.5M3.75 12h16.5m-16.5 5.25h16.5" /></svg>
     </div>
 
-    <?php include '_sidebar_admin.php'; // Inclui a sidebar universal ?>
+    <?php include '_sidebar_admin.php'; ?>
 
     <main class="main-content">
 
         <?php if ($view_data['modo_lista']): ?>
-            <header>
-                <h1>Central de Suporte</h1>
-                <p>Gerencie os tickets de suporte abertos pelos usuários.</p>
-            </header>
-
+            <header><h1>Central de Suporte</h1><p>Gerencie os tickets...</p></header>
             <?php if ($successMessage): ?><div class="alert alert-success"><?php echo htmlspecialchars($successMessage); ?></div><?php endif; ?>
             <?php if ($errorMessage): ?><div class="alert alert-error"><?php echo htmlspecialchars($errorMessage); ?></div><?php endif; ?>
-
             <div class="filter-tabs">
-                <a href="suporte.php?status=ABERTO"
-                   class="<?php echo ($view_data['filtro_status'] === 'ABERTO') ? 'active' : ''; ?>">
-                   Abertos
-                </a>
-                <a href="suporte.php?status=FECHADO"
-                   class="<?php echo ($view_data['filtro_status'] === 'FECHADO') ? 'active' : ''; ?>">
-                   Fechados
-                </a>
+                <a href="suporte.php?status=ABERTO" class="<?php echo ($view_data['filtro_status'] === 'ABERTO') ? 'active' : ''; ?>">Abertos</a>
+                <a href="suporte.php?status=FECHADO" class="<?php echo ($view_data['filtro_status'] === 'FECHADO') ? 'active' : ''; ?>">Fechados</a>
             </div>
-
             <section class="management-card" style="padding: 0;">
                 <div class="table-wrapper">
                     <table class="data-table">
-                        <thead>
-                            <tr>
-                                <th>Ticket</th>
-                                <th>Assunto</th>
-                                <th>Usuário</th>
-                                <th>Status</th>
-                                <th>Última Atualização</th>
-                                <th>Ações</th>
-                            </tr>
-                        </thead>
+                        <thead><tr><th>Ticket</th><th>Assunto</th><th>Usuário</th><th>Status</th><th>Última Atualização</th><th>Ações</th></tr></thead>
                         <tbody>
                             <?php if (empty($view_data['tickets'])): ?>
-                                <tr>
-                                    <td colspan="6" style="text-align: center; color: var(--text-muted); padding: 2rem;">
-                                        Nenhum ticket <?php echo $view_data['filtro_status'] === 'ABERTO' ? 'aberto' : 'fechado'; ?> encontrado.
-                                    </td>
-                                </tr>
+                                <tr><td colspan="6" style="text-align: center; color: var(--text-muted); padding: 2rem;">Nenhum ticket encontrado.</td></tr>
                             <?php else: ?>
                                 <?php foreach ($view_data['tickets'] as $ticket): ?>
                                     <tr>
                                         <td>#<?php echo $ticket['id']; ?></td>
                                         <td>
                                             <?php echo htmlspecialchars($ticket['assunto']); ?>
-                                            <?php if ($ticket['admin_nao_leu']): ?>
-                                                <span class="badge badge-new">Novo</span>
-                                            <?php endif; ?>
+                                            <?php if ($ticket['admin_nao_leu']): ?><span class="badge badge-new">Novo</span><?php endif; ?>
                                         </td>
                                         <td><?php echo htmlspecialchars($ticket['usuario_nome']); ?></td>
                                         <td><?php echo getStatusBadge($ticket['status']); ?></td>
                                         <td><?php echo formatarData($ticket['data_ultima_atualizacao']); ?></td>
-                                        <td>
-                                            <a href="suporte.php?ticket_id=<?php echo $ticket['id']; ?>" class="btn btn-info btn-respond">
-                                                <?php echo $view_data['filtro_status'] === 'ABERTO' ? 'Responder' : 'Ver'; ?>
-                                            </a>
-                                        </td>
+                                        <td><a href="suporte.php?ticket_id=<?php echo $ticket['id']; ?>" class="btn btn-info btn-respond"><?php echo $view_data['filtro_status'] === 'ABERTO' ? 'Responder' : 'Ver'; ?></a></td>
                                     </tr>
                                 <?php endforeach; ?>
                             <?php endif; ?>
@@ -618,9 +548,9 @@ function getStatusBadge($status) {
                 $usuario = $view_data['usuario_ticket'];
             ?>
                 <header>
-                    <a href="suporte.php" style="text-decoration: none; color: var(--text-muted); display: inline-flex; align-items: center; gap: 0.5rem; margin-bottom: 1rem;">
+                    <a href="suporte.php" style="/* ... Estilo Voltar ... */ text-decoration: none; color: var(--text-muted); display: inline-flex; align-items: center; gap: 0.5rem; margin-bottom: 1rem;">
                         <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" width="20" height="20"><path stroke-linecap="round" stroke-linejoin="round" d="M15.75 19.5L8.25 12l7.5-7.5" /></svg>
-                        Voltar para a lista
+                        Voltar
                     </a>
                     <h1><?php echo htmlspecialchars($ticket['assunto']); ?></h1>
                 </header>
@@ -633,14 +563,11 @@ function getStatusBadge($status) {
                         <div>
                             <h2>Ticket #<?php echo $ticket['id']; ?></h2>
                             <div class="user-info-ticket">
-                                Aberto por: <strong><?php echo htmlspecialchars($usuario['nome'] ?? 'Usuário Deletado'); ?></strong> (<?php echo htmlspecialchars($usuario['email'] ?? 'N/A'); ?>)
-                                <br>
+                                Aberto por: <strong><?php echo htmlspecialchars($usuario['nome'] ?? 'Usuário Deletado'); ?></strong> (...) <br>
                                 Em: <?php echo formatarData($ticket['data_criacao']); ?>
                             </div>
                         </div>
-                        <div id="ticket-status-badge">
-                            <?php echo getStatusBadge($ticket['status']); ?>
-                        </div>
+                        <div id="ticket-status-badge"><?php echo getStatusBadge($ticket['status']); ?></div>
                     </div>
 
                     <div class="chat-wrapper">
@@ -653,51 +580,52 @@ function getStatusBadge($status) {
                                     $is_admin = ($msg['remetente_nivel'] === 'admin');
                                     $is_system = (strpos($msg['mensagem'], '[TICKET') === 0);
 
-                                    if ($is_system) $msg_class = 'message-system';
-                                    else $msg_class = $is_admin ? 'message-admin' : 'message-user';
+                                    if ($is_system) { // Mensagem de Sistema
                                 ?>
-
-                                <?php if ($is_system): ?>
-                                    <div class="<?php echo $msg_class; ?>">
+                                    <div class="message-system">
                                         <?php echo htmlspecialchars($msg['mensagem']); ?> - <?php echo formatarData($msg['data_envio']); ?>
                                     </div>
-                                <?php else: ?>
-                                    <div class="<?php echo $msg_class; ?>">
-                                        <div class="message-sender">
-                                            <?php echo $is_admin ? htmlspecialchars($msg['remetente_nome']) . ' (Suporte)' : htmlspecialchars($msg['remetente_nome']); ?>
-                                        </div>
-                                        <div class="message-bubble">
-                                            <?php echo nl2br(htmlspecialchars($msg['mensagem'])); ?>
-
-                                            <?php if (!empty($msg['anexo_url'])): ?>
-                                                <a href="../<?php echo htmlspecialchars($msg['anexo_url']); ?>" target="_blank">
-                                                    <img src="../<?php echo htmlspecialchars($msg['anexo_url']); ?>" alt="Anexo" class="chat-image-anexo">
-                                                </a>
+                                <?php
+                                    } else { // Mensagem de Usuário ou Admin
+                                        $wrapper_class = $is_admin ? 'admin' : 'user';
+                                ?>
+                                    <div class="message-wrapper <?php echo $wrapper_class; ?>">
+                                        <div class="message-icon">
+                                            <?php if ($is_admin): ?>
+                                                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75 11.25 15 15 9.75m-3-7.036A11.959 11.959 0 0 1 3.598 6 11.99 11.99 0 0 0 3 9.749c0 5.592 3.824 10.29 9 11.623 5.176-1.332 9-6.03 9-11.622 0-1.31-.21-2.571-.598-3.751h-.152c-3.196 0-6.1-1.248-8.25-3.285Z"></path></svg>
+                                            <?php else: ?>
+                                                <svg fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M15.75 6a3.75 3.75 0 11-7.5 0 3.75 3.75 0 017.5 0zM4.501 20.118a7.5 7.5 0 0114.998 0A17.933 17.933 0 0112 21.75c-2.676 0-5.216-.584-7.499-1.632z"></path></svg>
                                             <?php endif; ?>
                                         </div>
-                                        <div class="message-time">
-                                            <?php echo formatarData($msg['data_envio']); ?>
+                                        <div class="message-content">
+                                            <div class="message-bubble <?php echo $wrapper_class; ?>">
+                                                <?php echo nl2br(htmlspecialchars($msg['mensagem'])); ?>
+
+                                                <?php if (!empty($msg['anexo_url'])): ?>
+                                                    <a href="../<?php echo htmlspecialchars($msg['anexo_url']); ?>" target="_blank">
+                                                        <img src="../<?php echo htmlspecialchars($msg['anexo_url']); ?>" alt="Anexo" class="chat-image-anexo">
+                                                    </a>
+                                                <?php endif; ?>
+
+                                                <div class="message-meta">
+                                                    <?php echo formatarData($msg['data_envio']); ?>
+                                                    <?php /* Status de leitura do admin (não implementado aqui) */ ?>
+                                                </div>
+                                            </div>
                                         </div>
                                     </div>
-                                <?php endif; ?>
-                            <?php endforeach; ?>
+                                <?php
+                                    } // Fim else (não sistema)
+                                ?>
+                            <?php endforeach; // Fim loop mensagens ?>
                         </div>
 
                         <?php if ($ticket['status'] !== 'FECHADO'): ?>
                             <div class="chat-reply-form">
                                 <form method="POST" action="suporte.php?ajax_action=admin_reply" id="chat-reply-form" enctype="multipart/form-data">
                                     <input type="hidden" name="ticket_id" value="<?php echo $ticket['id']; ?>">
-
-                                    <div class="form-group">
-                                        <label for="mensagem">Sua Resposta</label>
-                                        <textarea id="mensagem" name="mensagem" rows="4" placeholder="Digite sua resposta aqui..."></textarea>
-                                    </div>
-
-                                    <div class="form-group" style="margin-bottom: 0.5rem;">
-                                        <label for="anexo">Anexar Imagem (Opcional - Max 5MB)</label>
-                                        <input type="file" name="anexo" id="anexo" accept="image/png, image/jpeg, image/gif">
-                                    </div>
-
+                                    <div class="form-group"><label for="mensagem">Sua Resposta</label><textarea id="mensagem" name="mensagem" rows="4" placeholder="Digite sua resposta aqui..."></textarea></div>
+                                    <div class="form-group" style="margin-bottom: 0.5rem;"><label for="anexo">Anexar Imagem (Opcional - Max 5MB)</label><input type="file" name="anexo" id="anexo" accept="image/png, image/jpeg, image/gif"></div>
                                     <button type="submit" class="btn btn-info">Enviar Resposta</button>
                                 </form>
                             </div>
@@ -706,7 +634,7 @@ function getStatusBadge($status) {
 
                     <?php if ($ticket['status'] !== 'FECHADO'): ?>
                     <div style="margin-top: 1.5rem; padding-top: 1.5rem; border-top: 1px solid var(--border-color); text-align: right;">
-                        <form method="POST" action="suporte.php" onsubmit="return confirm('Tem certeza que deseja fechar este ticket? O usuário não poderá mais responder.');">
+                        <form method="POST" action="suporte.php" onsubmit="return confirm('Tem certeza que deseja fechar este ticket?');">
                             <input type="hidden" name="action" value="close_ticket">
                             <input type="hidden" name="ticket_id" value="<?php echo $ticket['id']; ?>">
                             <button type="submit" class="btn btn-secondary">Fechar Ticket</button>
@@ -717,22 +645,20 @@ function getStatusBadge($status) {
 
             <?php else: ?>
                 <header><h1>Erro</h1></header>
-                <div class="alert alert-error">O ticket que você está tentando acessar não foi encontrado.</div>
-                <a href="suporte.php" class="btn btn-info">Voltar para a lista</a>
+                <div class="alert alert-error">Ticket não encontrado.</div>
+                <a href="suporte.php" class="btn btn-info">Voltar</a>
             <?php endif; ?>
 
         <?php endif; ?>
-
     </main>
 
     <script>
     document.addEventListener('DOMContentLoaded', () => {
-        // --- LÓGICA PADRÃO SIDEBAR/DROPDOWN (Unificada) ---
+        // --- Lógica Sidebar/Dropdown (sem alteração) ---
         const menuToggle = document.getElementById('menu-toggle');
         const sidebar = document.querySelector('.sidebar');
         const body = document.body;
-
-        if (menuToggle && sidebar) {
+        if (menuToggle && sidebar) { /* ... Event Listeners ... */
             menuToggle.addEventListener('click', (event) => { event.stopPropagation(); body.classList.toggle('sidebar-open'); });
             body.addEventListener('click', (event) => {
                 if (body.classList.contains('sidebar-open') && !sidebar.contains(event.target) && !menuToggle.contains(event.target)) {
@@ -745,10 +671,9 @@ function getStatusBadge($status) {
                 });
             });
         }
-
         const userProfileMenu = document.getElementById('user-profile-menu');
         const profileDropdown = document.getElementById('profile-dropdown');
-        if(userProfileMenu && profileDropdown){
+        if(userProfileMenu && profileDropdown){ /* ... Event Listeners ... */
             userProfileMenu.addEventListener('click', (event) => { event.stopPropagation(); profileDropdown.classList.toggle('show'); });
             window.addEventListener('click', () => {
                 if (profileDropdown.classList.contains('show')) profileDropdown.classList.remove('show');
@@ -760,131 +685,88 @@ function getStatusBadge($status) {
         const statusBadge = document.getElementById('ticket-status-badge');
 
         // --- Helpers JS ---
-        const formatDate_JS = (dateStr) => {
+        const formatDate_JS = (dateStr) => { /* ... */
             if (!dateStr) return 'N/A';
-            return new Date(dateStr).toLocaleString('pt-BR', {
-                day: '2-digit', month: '2-digit', year: 'numeric',
-                hour: '2-digit', minute: '2-digit'
-            });
+            return new Date(dateStr).toLocaleString('pt-BR', {day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit'}); // Formato dd/mm HH:ii
         };
-
-        // ⭐ NOVO: Helper para gerar HTML do badge
-        const getBadgeHTML = (status) => {
-            if (status === 'ABERTO') {
-                return '<span class="badge badge-warning">Aguardando Suporte</span>';
-            } else if (status === 'AGUARDANDO_USUARIO') {
-                return '<span class="badge badge-info">Aguardando Usuário</span>';
-            } else {
-                return '<span class="badge badge-muted">Fechado</span>';
-            }
+        const getBadgeHTML = (status) => { /* ... */
+            if (status === 'ABERTO') return '<span class="badge badge-warning">Aguardando Suporte</span>';
+            if (status === 'AGUARDANDO_USUARIO') return '<span class="badge badge-info">Aguardando Usuário</span>';
+            return '<span class="badge badge-muted">Fechado</span>';
         };
+        const sanitizeHTML = (str) => str.replace(/</g, "&lt;").replace(/>/g, "&gt;");
 
-        // ⭐ NOVO: Helper para sanitizar HTML (evitar XSS)
-        const sanitizeHTML = (str) => {
-            return str.replace(/</g, "&lt;").replace(/>/g, "&gt;");
-        };
-
-        // ⭐ NOVO: Helper para adicionar mensagens do *USUÁRIO* (do polling)
-        const appendUserMessageToChat = (msg) => {
-            const msgDiv = document.createElement('div');
-            msgDiv.className = 'message-user chat-message';
-
-            const senderDiv = document.createElement('div');
-            senderDiv.className = 'message-sender';
-            senderDiv.textContent = sanitizeHTML(msg.remetente_nome || 'Usuário');
-
-            const bubbleDiv = document.createElement('div');
-            bubbleDiv.className = 'message-bubble';
-            // Sanitiza e formata quebras de linha
-            bubbleDiv.innerHTML = msg.mensagem ? sanitizeHTML(msg.mensagem).replace(/\n/g, '<br>') : '';
-
+        // ⭐ NOVO: Funções para criar HTML da mensagem (com nova estrutura)
+        const createUserMessageHTML = (msg) => {
+            let imageHTML = '';
             if (msg.anexo_url) {
-                const link = document.createElement('a');
-                link.href = '../' + sanitizeHTML(msg.anexo_url);
-                link.target = '_blank';
-
-                const img = document.createElement('img');
-                img.src = '../' + sanitizeHTML(msg.anexo_url);
-                img.alt = 'Anexo';
-                img.className = 'chat-image-anexo';
-
-                link.appendChild(img);
-                bubbleDiv.appendChild(link);
+                imageHTML = `
+                    <a href="../${sanitizeHTML(msg.anexo_url)}" target="_blank">
+                        <img src="../${sanitizeHTML(msg.anexo_url)}" alt="Anexo" class="chat-image-anexo">
+                    </a>`;
             }
-
-            const timeDiv = document.createElement('div');
-            timeDiv.className = 'message-time';
-            timeDiv.textContent = formatDate_JS(msg.data_envio);
-
-            msgDiv.appendChild(senderDiv);
-            msgDiv.appendChild(bubbleDiv);
-            msgDiv.appendChild(timeDiv);
-
-            chatHistory.appendChild(msgDiv);
+            return `
+                <div class="message-wrapper user">
+                    <div class="message-icon">
+                        <svg fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M15.75 6a3.75 3.75 0 11-7.5 0 3.75 3.75 0 017.5 0zM4.501 20.118a7.5 7.5 0 0114.998 0A17.933 17.933 0 0112 21.75c-2.676 0-5.216-.584-7.499-1.632z"></path></svg>
+                    </div>
+                    <div class="message-content">
+                        <div class="message-bubble user">
+                            ${msg.mensagem ? sanitizeHTML(msg.mensagem).replace(/\n/g, '<br>') : ''}
+                            ${imageHTML}
+                            <div class="message-meta">
+                                ${formatDate_JS(msg.data_envio)}
+                            </div>
+                        </div>
+                    </div>
+                </div>`;
         };
 
-        // ⭐ NOVO: Helper para adicionar mensagens do *ADMIN* (do form AJAX)
-        const appendAdminMessageToChat = (msg) => {
-            const msgDiv = document.createElement('div');
-            msgDiv.className = 'message-admin chat-message';
-
-            const senderDiv = document.createElement('div');
-            senderDiv.className = 'message-sender';
-            senderDiv.textContent = sanitizeHTML(msg.remetente_nome || 'Admin') + ' (Suporte)';
-
-            const bubbleDiv = document.createElement('div');
-            bubbleDiv.className = 'message-bubble';
-            bubbleDiv.innerHTML = msg.mensagem ? sanitizeHTML(msg.mensagem).replace(/\n/g, '<br>') : '';
-
+        const createAdminMessageHTML = (msg) => {
+             let imageHTML = '';
             if (msg.anexo_url) {
-                const link = document.createElement('a');
-                link.href = '../' + sanitizeHTML(msg.anexo_url);
-                link.target = '_blank';
-
-                const img = document.createElement('img');
-                img.src = '../' + sanitizeHTML(msg.anexo_url);
-                img.alt = 'Anexo';
-                img.className = 'chat-image-anexo';
-
-                link.appendChild(img);
-                bubbleDiv.appendChild(link);
+                imageHTML = `
+                    <a href="../${sanitizeHTML(msg.anexo_url)}" target="_blank">
+                        <img src="../${sanitizeHTML(msg.anexo_url)}" alt="Anexo" class="chat-image-anexo">
+                    </a>`;
             }
-
-            const timeDiv = document.createElement('div');
-            timeDiv.className = 'message-time';
-            timeDiv.textContent = formatDate_JS(msg.data_envio);
-
-            msgDiv.appendChild(senderDiv);
-            msgDiv.appendChild(bubbleDiv);
-            msgDiv.appendChild(timeDiv);
-
-            chatHistory.appendChild(msgDiv);
+            return `
+                <div class="message-wrapper admin">
+                     <div class="message-icon">
+                         <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75 11.25 15 15 9.75m-3-7.036A11.959 11.959 0 0 1 3.598 6 11.99 11.99 0 0 0 3 9.749c0 5.592 3.824 10.29 9 11.623 5.176-1.332 9-6.03 9-11.622 0-1.31-.21-2.571-.598-3.751h-.152c-3.196 0-6.1-1.248-8.25-3.285Z"></path></svg>
+                     </div>
+                     <div class="message-content">
+                        <div class="message-bubble admin">
+                            ${msg.mensagem ? sanitizeHTML(msg.mensagem).replace(/\n/g, '<br>') : ''}
+                            ${imageHTML}
+                            <div class="message-meta">
+                                ${formatDate_JS(msg.data_envio)}
+                            </div>
+                        </div>
+                     </div>
+                </div>`;
         };
 
         // --- Lógica de Polling e Envio de Formulário ---
         if (chatHistory) {
-            // 1. Scrollar o chat para a última mensagem no carregamento
+            // 1. Scroll inicial
             chatHistory.scrollTop = chatHistory.scrollHeight;
 
             const ticketId = chatHistory.dataset.ticketId;
             let lastMessageId = parseInt(chatHistory.dataset.lastMessageId || '0');
 
-            // 2. Função de Polling (a cada 3 segundos)
-            const checkNewMessages = async () => {
-                try {
-                    const params = new URLSearchParams({
-                        ajax_action: 'get_new_messages',
-                        ticket_id: ticketId,
-                        last_message_id: lastMessageId
-                    });
-
+            // 2. Função de Polling
+            const checkNewMessages = async () => { /* ... (Lógica fetch igual) ... */
+                 try {
+                    const params = new URLSearchParams({ajax_action: 'get_new_messages', ticket_id: ticketId, last_message_id: lastMessageId });
                     const response = await fetch(`suporte.php?${params.toString()}`);
                     const data = await response.json();
 
                     if (data.success && data.messages.length > 0) {
                         let newLastId = lastMessageId;
                         data.messages.forEach(msg => {
-                            appendUserMessageToChat(msg);
+                            // ⭐ Usa a nova função para criar o HTML
+                            chatHistory.insertAdjacentHTML('beforeend', createUserMessageHTML(msg));
                             newLastId = msg.id;
                         });
 
@@ -896,7 +778,6 @@ function getStatusBadge($status) {
                         }
                     }
 
-                    // ⭐ NOVO: Atualiza o status se o backend informar que mudou
                     if (data.success && data.status_changed && statusBadge) {
                          statusBadge.innerHTML = getBadgeHTML('ABERTO');
                     }
@@ -912,10 +793,10 @@ function getStatusBadge($status) {
                 const pollingInterval = setInterval(checkNewMessages, 3000);
             <?php endif; ?>
 
-            // 4. ⭐ NOVO: Intercepta o envio do formulário de resposta
+            // 4. Intercepta o envio do formulário (AJAX)
             const replyForm = document.getElementById('chat-reply-form');
             if (replyForm) {
-                replyForm.addEventListener('submit', async function(e) {
+                replyForm.addEventListener('submit', async function(e) { /* ... (Lógica fetch igual) ... */
                     e.preventDefault();
 
                     const formData = new FormData(replyForm);
@@ -924,33 +805,30 @@ function getStatusBadge($status) {
                     submitButton.textContent = 'Enviando...';
 
                     try {
-                        const response = await fetch('suporte.php?ajax_action=admin_reply', {
-                            method: 'POST',
-                            body: formData
-                        });
-
+                        const response = await fetch('suporte.php?ajax_action=admin_reply', {method: 'POST', body: formData});
                         const data = await response.json();
 
                         if (data.success && data.message) {
-                            appendAdminMessageToChat(data.message);
+                            // ⭐ Usa a nova função para criar o HTML
+                            chatHistory.insertAdjacentHTML('beforeend', createAdminMessageHTML(data.message));
 
                             lastMessageId = data.message.id;
                             chatHistory.dataset.lastMessageId = lastMessageId;
 
                             chatHistory.scrollTop = chatHistory.scrollHeight;
-                            replyForm.reset(); // Limpa o texto e o arquivo
+                            replyForm.reset();
 
                             if (statusBadge) {
                                 statusBadge.innerHTML = getBadgeHTML('AGUARDANDO_USUARIO');
                             }
 
                         } else {
-                            alert('Erro ao enviar resposta: ' + (data.message || 'Erro desconhecido.'));
+                            alert('Erro: ' + (data.message || 'Erro desconhecido.'));
                         }
 
                     } catch (error) {
                         console.error('Erro no fetch:', error);
-                        alert('Erro de conexão ao enviar resposta.');
+                        alert('Erro de conexão.');
                     } finally {
                         submitButton.disabled = false;
                         submitButton.textContent = 'Enviar Resposta';
