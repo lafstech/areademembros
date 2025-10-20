@@ -254,7 +254,7 @@ if (!$produto) {
         #pix-display { text-align: center; }
         #qr-code-container { width: 250px; height: 250px; margin: 0 auto 1rem auto; background-color: white; padding: 15px; border-radius: 8px; }
         #pix-code-input { width: 100%; padding: 0.75rem; background-color: #111827; border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-color); margin: 1rem 0; text-align: center; }
-        #copy-btn { display: inline-flex; align-items: center; gap: 0.5rem; padding: 0.7rem 1.5rem; background-color: #374151; color: white; border: none; border-radius: 8px; cursor: pointer; transition: background-color 0.2s; }
+        #copy-btn { display: inline-flex; align-items: center; gap: 0.5rem; padding: 0.7rem 1.5rem; background-color: #374151; color: #0d0d0d; border: none; border-radius: 8px; cursor: pointer; transition: background-color 0.2s; }
         #copy-btn:hover { background-color: #4b5563; }
         .pix-timer { margin-top: 1.5rem; color: var(--text-muted); font-size: 0.9rem; }
         .pix-timer span { font-weight: 600; color: var(--text-color); }
@@ -266,7 +266,7 @@ if (!$produto) {
         .success-popup { background-color: var(--sidebar-color); padding: 3rem; border-radius: 16px; text-align: center; animation: scaleIn 0.5s ease; }
         .success-popup h2 { font-size: 1.8rem; margin: 1.5rem 0 0.5rem 0; color: var(--success-color); }
         .success-popup p { color: var(--text-muted); }
-        .checkmark-circle { width: 100px; height: 100px; border-radius: 50%; border: 3px solid var(--success-color); display: flex; align-items: center; justify-content: center; margin: 0 auto; }
+        .checkmark-circle { width: 20px; height: 20px; border-radius: 50%; border: 3px solid var(--success-color); display: flex; align-items: center; justify-content: center; margin: 0 auto; }
         .checkmark { width: 20px; height: 20px; border-bottom: 10px solid var(--success-color); border-right: 10px solid var(--success-color); transform: rotate(45deg) translate(-10px, -5px); animation: drawCheck 0.5s ease-out 0.5s forwards; opacity: 0; }
         @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
         @keyframes scaleIn { from { transform: scale(0.8); opacity: 0; } to { transform: scale(1); opacity: 1; } }
@@ -371,8 +371,7 @@ if (!$produto) {
                         <div id="qr-code-container"></div>
                         <input type="text" id="pix-code-input" value="<?php echo htmlspecialchars($pixData['pix_copy_paste_code']); ?>" readonly>
                         <button id="copy-btn">
-                            <svg fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24" width="20"><path stroke-linecap="round" stroke-linejoin="round" d="M15.75 17.25v3.375c0 .621-.504 1.125-1.125 1.125h-9.75a1.125 1.125 0 01-1.125-1.125V7.875c0-.621.504-1.125 1.125-1.125H6.75a9.06 9.06 0 011.5.124M10.5 18.75v-5.25c0-.621.504-1.125 1.125-1.125h5.25c.621 0 1.125.504 1.125 1.125v5.25c0 .621-.504 1.125-1.125-1.125h-5.25a1.125 1.125 0 01-1.125-1.125z"></path><path stroke-linecap="round" stroke-linejoin="round" d="M16.5 5.25v-1.5a1.125 1.125 0 00-1.125-1.125H6.75a1.125 1.125 0 00-1.125 1.125v9.75c0 .621.504 1.125 1.125 1.125h1.5"></path></svg>
-                            <span>Copiar Código</span>
+                            <svg width="20px" height="20px" viewBox="0 0 0.6 0.6" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M0.05 0.1a0.05 0.05 0 0 1 0.05 -0.05h0.25a0.05 0.05 0 0 1 0.05 0.05v0.1h0.1a0.05 0.05 0 0 1 0.05 0.05v0.25a0.05 0.05 0 0 1 -0.05 0.05H0.25a0.05 0.05 0 0 1 -0.05 -0.05v-0.1H0.1a0.05 0.05 0 0 1 -0.05 -0.05zm0.2 0.3v0.1h0.25V0.25h-0.1v0.1a0.05 0.05 0 0 1 -0.05 0.05zm0.1 -0.05V0.1H0.1v0.25z" fill="#0D0D0D"></path></svg>                            <span>Copiar Código</span>
                         </button>
                         <p class="pix-timer">Este código expira em <span id="pix-countdown">10:00</span></p>
                     </div>
