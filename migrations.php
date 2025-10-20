@@ -258,12 +258,12 @@ function run_migrations($pdo) {
 
         // ⭐ NOVO: INSERÇÃO DAS CHAVES DE CONFIGURAÇÃO NA TABELA
         $config_keys = [
-            'MAILGUN_API_KEY' => ['a70370241218ff94a9eea3e39ac6f86b-556e0aa9-fb956281', 'Chave de API secreta da Mailgun.'],
-            'MAILGUN_DOMAIN' => ['lafstech.store', 'Domínio de envio da Mailgun.'],
-            'MAILGUN_FROM_EMAIL' => ['noreply@lafstech.store', 'E-mail de remetente.'],
-            'MAILGUN_API_URL' => ['https://api.mailgun.net/v3', 'Endpoint da API da Mailgun (US).'],
-            'PIXUP_CLIENT_ID' => ['notfakeluccas_2735058915962624', 'ID do Cliente PixUp.'],
-            'PIXUP_CLIENT_SECRET' => ['3e56523361cb1b25b2074302ed1e93e5111f62c948111250deacf67877838062', 'Chave secreta do Cliente PixUp.'],
+            'MAILGUN_API_KEY' => ['altere o valor', 'Chave de API secreta da Mailgun.'],
+            'MAILGUN_DOMAIN' => ['altere o valor', 'Domínio de envio da Mailgun.'],
+            'MAILGUN_FROM_EMAIL' => ['altere o valor', 'E-mail de remetente.'],
+            'MAILGUN_API_URL' => ['altere o valor', 'Endpoint da API da Mailgun (US).'],
+            'PIXUP_CLIENT_ID' => ['altere o valor', 'ID do Cliente PixUp.'],
+            'PIXUP_CLIENT_SECRET' => ['altere o valor', 'Chave secreta do Cliente PixUp.'],
             'PIXUP_POSTBACK_URL' => ['https://sitedemembros-1.onrender.com/paginamembros/api/webhook_pixup_cursos.php', 'URL de Webhook (Postback) do PixUp para confirmar pagamentos.'],
         ];
 
