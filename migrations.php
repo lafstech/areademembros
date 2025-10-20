@@ -258,13 +258,13 @@ function run_migrations($pdo) {
 
         // ⭐ NOVO: INSERÇÃO DAS CHAVES DE CONFIGURAÇÃO NA TABELA
         $config_keys = [
-            'MAILGUN_API_KEY' => ['https://api.mailgun.net/v3', 'Chave de API secreta da Mailgun.'],
+            'MAILGUN_API_KEY' => ['altere o valor', 'Chave de API secreta da Mailgun.'],
             'MAILGUN_DOMAIN' => ['altere o valor', 'Domínio de envio da Mailgun.'],
-            'MAILGUN_FROM_EMAIL' => ['altere o valor', 'E-mail de remetente.'],
-            'MAILGUN_API_URL' => ['altere o valor', 'Endpoint da API da Mailgun (US).'],
+            'MAILGUN_FROM_EMAIL' => ['noreply@seudominio.com', 'E-mail de remetente.'],
+            'MAILGUN_API_URL' => ['https://api.mailgun.net/v3', 'Endpoint da API da Mailgun (US).'],
             'PIXUP_CLIENT_ID' => ['altere o valor', 'ID do Cliente PixUp.'],
             'PIXUP_CLIENT_SECRET' => ['altere o valor', 'Chave secreta do Cliente PixUp.'],
-            'PIXUP_POSTBACK_URL' => ['https://sitedemembros-1.onrender.com/paginamembros/api/webhook_pixup_cursos.php', 'URL de Webhook (Postback) do PixUp para confirmar pagamentos.'],
+            'PIXUP_POSTBACK_URL' => ['https://seudominio.com/paginamembros/api/webhook_pixup_cursos.php', 'URL de Webhook (Postback) do PixUp para confirmar pagamentos.'],
         ];
 
         foreach ($config_keys as $chave => list($valor, $descricao)) {
