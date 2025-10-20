@@ -267,7 +267,7 @@ if (!$produto) {
         .success-popup h2 { font-size: 1.8rem; margin: 1.5rem 0 0.5rem 0; color: var(--success-color); }
         .success-popup p { color: var(--text-muted); }
         .checkmark-circle { width: 100px; height: 100px; border-radius: 50%; border: 3px solid var(--success-color); display: flex; align-items: center; justify-content: center; margin: 0 auto; }
-        .checkmark { width: 50px; height: 100px; border-bottom: 10px solid var(--success-color); border-right: 10px solid var(--success-color); transform: rotate(45deg) translate(-10px, -5px); animation: drawCheck 0.5s ease-out 0.5s forwards; opacity: 0; }
+        .checkmark { width: 50px; height: 50px; border-bottom: 10px solid var(--success-color); border-right: 10px solid var(--success-color); transform: rotate(45deg) translate(-10px, -5px); animation: drawCheck 0.5s ease-out 0.5s forwards; opacity: 0; }
         @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
         @keyframes scaleIn { from { transform: scale(0.8); opacity: 0; } to { transform: scale(1); opacity: 1; } }
         @keyframes drawCheck { from { width: 0; height: 0; opacity: 0; } to { width: 50px; height: 100px; opacity: 1; } }
